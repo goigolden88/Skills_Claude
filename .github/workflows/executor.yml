@@ -1,0 +1,111 @@
+name: Исполнитель (общий)
+
+# Общий workflow исполнителя конвейера «Штаб» (Ш-33): проект вызывает его
+# коротким файлом по метке «готово» — условия запуска, очередь и права
+# задаёт он. Здесь — подготовка машины, инструкция и запуск Claude Code.
+# Правка этого файла меняет исполнителя во всех проектах сразу.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Версия Node; пусто — Node не ставится
+        type: string
+        default: ""
+      chrome:
+        description: Готовить Chrome для прогона в браузере
+        type: boolean
+        default: false
+      project-tools:
+        description: Команды проекта, которые агенту можно запускать
+        type: string
+        default: "Bash(npm ci),Bash(npm test),Bash(npm run:*)"
+      model:
+        type: string
+        default: claude-sonnet-5-5
+      effort:
+        type: string
+        default: high
+      max-turns:
+        type: number
+        default: 80
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  executor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - if: inputs.node-version != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      # Ubuntu 24.04 может не пустить Chrome в его песочницу; первый запуск
+      # на чистой машине долгий — прогрев, чтобы прогон не падал не из-за кода.
+      - if: inputs.chrome
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          timeout 30 google-chrome --headless=new --disable-gpu --dump-dom about:blank > /dev/null 2>&1 || true
+
+      # Инструкция — из этого же репо, той версии, что и workflow.
+      - name: Инструкция исполнителя
+        id: instruction
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/agents/executor.md" -o "$RUNNER_TEMP/executor.md" \
+            || curl -sfL https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/agents/executor.md -o "$RUNNER_TEMP/executor.md"
+          {
+            echo 'text<<END_OF_INSTRUCTION'
+            cat "$RUNNER_TEMP/executor.md"
+            echo 'END_OF_INSTRUCTION'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: anthropics/claude-code-action@v1
+        id: claude
+        with:
+          # Токен подписки (claude setup-token); ключ API не заводится (Ш-12, Ш-17).
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Репо: ${{ github.repository }}
+            Issue: #${{ github.event.issue.number }}
+            Владелец: @${{ github.repository_owner }}
+
+            Ты в GitHub Action: клон с подмодулями готов. Ветку назови
+            agent/${{ github.event.issue.number }}. Метки, комментарии и PR — через gh.
+            Команды разрешены списком: запускай по одной за вызов, без `;`, `&&`,
+            `|` и `cd` — составную команду запуск отклонит, и ход пропадёт. Файлы
+            читай и ищи инструментами Read, Grep, Glob, а не cat, grep, ls.
+
+            ${{ steps.instruction.outputs.text }}
+          # Модель, усилие, ходы — по замерам (Ш-19, Ш-31); проект может задать свои.
+          claude_args: |
+            --model ${{ inputs.model }}
+            --effort ${{ inputs.effort }}
+            --max-turns ${{ inputs.max-turns }}
+            --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
+            --disallowedTools "Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
+
+      # Замер прогона (Ш-19, Ш-31): ходы и время — из итога Claude Code, а не
+      # со слов агента; команды, в которых ему отказали, — чтобы править
+      # список разрешённых. Только имя инструмента и начало команды.
+      - name: Замер прогона
+        if: always() && steps.claude.outputs.execution_file != ''
+        run: |
+          jq -r '
+            [.[] | select(.type == "result")] | last |
+            "### Замер прогона",
+            "",
+            "Модель: ${{ inputs.model }}/${{ inputs.effort }}",
+            "",
+            "Ходов: \(.num_turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
+            "",
+            "Отказано в правах: \(.permission_denials | length)",
+            (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")
+          ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
