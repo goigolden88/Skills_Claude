@@ -37,6 +37,12 @@ jobs:
   executor:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # Прогон пары (Ш-34 Штаба): метка «opus» на issue — та же задача на Opus,
+    # для сравнения моделей; своя ветка, чужой PR по задаче не останавливает.
+    env:
+      PAIR: ${{ contains(github.event.issue.labels.*.name, 'opus') }}
+      MODEL: ${{ contains(github.event.issue.labels.*.name, 'opus') && 'claude-opus-5-5' || inputs.model }}
+      BRANCH: agent/${{ github.event.issue.number }}${{ contains(github.event.issue.labels.*.name, 'opus') && '-opus' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,8 +83,10 @@ jobs:
             Issue: #${{ github.event.issue.number }}
             Владелец: @${{ github.repository_owner }}
 
+            ${{ env.PAIR == 'true' && 'Прогон пары: да — см. «Прогон пары» в инструкции.' || '' }}
+
             Ты в GitHub Action: клон с подмодулями готов. Ветку назови
-            agent/${{ github.event.issue.number }}. Метки, комментарии и PR — через gh.
+            ${{ env.BRANCH }}. Метки, комментарии и PR — через gh.
             Команды разрешены списком: запускай по одной за вызов, без `;`, `&&`,
             `|` и `cd` — составную команду запуск отклонит, и ход пропадёт. Файлы
             читай и ищи инструментами Read, Grep, Glob, а не cat, grep, ls.
@@ -86,7 +94,7 @@ jobs:
             ${{ steps.instruction.outputs.text }}
           # Модель, усилие, ходы — по замерам (Ш-19, Ш-31); проект может задать свои.
           claude_args: |
-            --model ${{ inputs.model }}
+            --model ${{ env.MODEL }}
             --effort ${{ inputs.effort }}
             --max-turns ${{ inputs.max-turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
@@ -102,7 +110,7 @@ jobs:
             [.[] | select(.type == "result")] | last |
             "### Замер прогона",
             "",
-            "Модель: ${{ inputs.model }}/${{ inputs.effort }}",
+            "Модель: ${{ env.MODEL }}/${{ inputs.effort }}",
             "",
             "Ходов: \(.num_turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
             "",
