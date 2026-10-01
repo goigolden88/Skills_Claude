@@ -28,7 +28,7 @@ on:
         default: high
       max-turns:
         type: number
-        default: 80
+        default: 100
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
