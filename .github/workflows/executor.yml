@@ -22,7 +22,7 @@ on:
         default: "Bash(npm ci),Bash(npm test),Bash(npm run:*)"
       model:
         type: string
-        default: claude-sonnet-5-5
+        default: claude-opus-5-5
       effort:
         type: string
         default: high
@@ -37,12 +37,13 @@ jobs:
   executor:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Прогон пары (Ш-34 Штаба): метка «opus» на issue — та же задача на Opus,
-    # для сравнения моделей; своя ветка, чужой PR по задаче не останавливает.
+    # Метка модели на issue (Ш-34, Ш-36 Штаба): «sonnet» или «opus» — прогон
+    # на этой модели вместо модели по умолчанию. Пока это прогон пары для
+    # сравнения моделей: своя ветка, чужой PR по задаче не останавливает.
     env:
-      PAIR: ${{ contains(github.event.issue.labels.*.name, 'opus') }}
-      MODEL: ${{ contains(github.event.issue.labels.*.name, 'opus') && 'claude-opus-5-5' || inputs.model }}
-      BRANCH: agent/${{ github.event.issue.number }}${{ contains(github.event.issue.labels.*.name, 'opus') && '-opus' || '' }}
+      PAIR: ${{ contains(github.event.issue.labels.*.name, 'sonnet') || contains(github.event.issue.labels.*.name, 'opus') }}
+      MODEL: ${{ contains(github.event.issue.labels.*.name, 'sonnet') && 'claude-sonnet-5-5' || contains(github.event.issue.labels.*.name, 'opus') && 'claude-opus-5-5' || inputs.model }}
+      BRANCH: agent/${{ github.event.issue.number }}${{ contains(github.event.issue.labels.*.name, 'sonnet') && '-sonnet' || contains(github.event.issue.labels.*.name, 'opus') && '-opus' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
