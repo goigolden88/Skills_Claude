@@ -1,8 +1,9 @@
 name: Исполнитель (общий)
 
 # Общий workflow исполнителя конвейера «Штаб» (Ш-33): проект вызывает его
-# коротким файлом по метке «готово» — условия запуска, очередь и права
-# задаёт он. Здесь — подготовка машины, инструкция и запуск Claude Code.
+# коротким файлом по метке «готово» — условия запуска и права задаёт он.
+# Здесь — очередь (Ш-41, Ш-42): метка только будит, задачу каждый слот
+# выбирает сам; подготовка машины, инструкция и запуск Claude Code.
 # Правка этого файла меняет исполнителя во всех проектах сразу.
 
 on:
@@ -37,19 +38,42 @@ jobs:
   executor:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Метка модели на issue (Ш-34, Ш-36 Штаба): «sonnet» или «opus» — прогон
-    # на этой модели вместо модели по умолчанию. Пока это прогон пары для
-    # сравнения моделей: своя ветка, чужой PR по задаче не останавливает.
+    # Три слота строго по очереди: каждый берёт следующую задачу (Ш-42).
+    # Сбой слота отменяет остальные — человек смотрит.
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        slot: [1, 2, 3]
+    # GH_TOKEN — только своим шагам: в шаге Claude он подменил бы токен
+    # App, и PR от github-actions не запустил бы CI.
     env:
-      PAIR: ${{ contains(github.event.issue.labels.*.name, 'sonnet') || contains(github.event.issue.labels.*.name, 'opus') }}
-      MODEL: ${{ contains(github.event.issue.labels.*.name, 'sonnet') && 'claude-sonnet-5-5' || contains(github.event.issue.labels.*.name, 'opus') && 'claude-opus-5-5' || inputs.model }}
-      BRANCH: agent/${{ github.event.issue.number }}${{ contains(github.event.issue.labels.*.name, 'sonnet') && '-sonnet' || contains(github.event.issue.labels.*.name, 'opus') && '-opus' || '' }}
+      REPO: ${{ github.repository }}
+      OWNER: ${{ github.repository_owner }}
     steps:
-      - uses: actions/checkout@v4
+      # Инструкция и очередь — из этого же репо, той версии, что и workflow.
+      - name: Файлы исполнителя
+        run: |
+          for f in agents/executor.md scripts/queue-pick.sh; do
+            curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
+              || curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/$f" -o "$RUNNER_TEMP/${f##*/}"
+          done
+
+      # Выбор задачи и лимиты Ш-07 — до Claude, ходов не тратит. Метка модели
+      # (sonnet, opus) — модель; метка «пара» — прогон пары (Ш-34, Ш-42).
+      - name: Очередь
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_MODEL: ${{ inputs.model }}
+        run: bash "$RUNNER_TEMP/queue-pick.sh"
+
+      - if: steps.pick.outputs.issue != ''
+        uses: actions/checkout@v4
         with:
           submodules: true
 
-      - if: inputs.node-version != ''
+      - if: steps.pick.outputs.issue != '' && inputs.node-version != ''
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
@@ -57,37 +81,37 @@ jobs:
 
       # Ubuntu 24.04 может не пустить Chrome в его песочницу; первый запуск
       # на чистой машине долгий — прогрев, чтобы прогон не падал не из-за кода.
-      - if: inputs.chrome
+      - if: steps.pick.outputs.issue != '' && inputs.chrome
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           timeout 30 google-chrome --headless=new --disable-gpu --dump-dom about:blank > /dev/null 2>&1 || true
 
-      # Инструкция — из этого же репо, той версии, что и workflow.
       - name: Инструкция исполнителя
         id: instruction
+        if: steps.pick.outputs.issue != ''
         run: |
-          curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/agents/executor.md" -o "$RUNNER_TEMP/executor.md" \
-            || curl -sfL https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/agents/executor.md -o "$RUNNER_TEMP/executor.md"
           {
             echo 'text<<END_OF_INSTRUCTION'
             cat "$RUNNER_TEMP/executor.md"
             echo 'END_OF_INSTRUCTION'
           } >> "$GITHUB_OUTPUT"
 
-      - uses: anthropics/claude-code-action@v1
+      - if: steps.pick.outputs.issue != ''
+        uses: anthropics/claude-code-action@v1
         id: claude
         with:
           # Токен подписки (claude setup-token); ключ API не заводится (Ш-12, Ш-17).
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Репо: ${{ github.repository }}
-            Issue: #${{ github.event.issue.number }}
+            Issue: #${{ steps.pick.outputs.issue }}
             Владелец: @${{ github.repository_owner }}
 
-            ${{ env.PAIR == 'true' && 'Прогон пары: да — см. «Прогон пары» в инструкции.' || '' }}
+            ${{ steps.pick.outputs.pair == 'yes' && 'Прогон пары: да — см. «Прогон пары» в инструкции.' || '' }}
 
             Ты в GitHub Action: клон с подмодулями готов. Ветку назови
-            ${{ env.BRANCH }}. Метки, комментарии и PR — через gh.
+            ${{ steps.pick.outputs.branch }}. Метку `в-работе` поставил запуск.
+            Метки, комментарии и PR — через gh.
             Команды разрешены списком: запускай по одной за вызов, без `;`, `&&`,
             `|` и `cd` — составную команду запуск отклонит, и ход пропадёт. Файлы
             читай и ищи инструментами Read, Grep, Glob, а не cat, grep, ls.
@@ -95,7 +119,7 @@ jobs:
             ${{ steps.instruction.outputs.text }}
           # Модель, усилие, ходы — по замерам (Ш-19, Ш-31); проект может задать свои.
           claude_args: |
-            --model ${{ env.MODEL }}
+            --model ${{ steps.pick.outputs.model }}
             --effort ${{ inputs.effort }}
             --max-turns ${{ inputs.max-turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
@@ -111,10 +135,42 @@ jobs:
             [.[] | select(.type == "result")] | last |
             "### Замер прогона",
             "",
-            "Модель: ${{ env.MODEL }}/${{ inputs.effort }}",
+            "Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}",
+            "",
+            "Модель: ${{ steps.pick.outputs.model }}/${{ inputs.effort }}",
             "",
             "Ходов: \(.num_turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
             "",
             "Отказано в правах: \(.permission_denials | length)",
             (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Событие лимита подписки (Ш-42): статус окна, процента в нём нет.
+          jq -r '
+            [.[] | select(.type == "rate_limit_event") | .rate_limit_info // {} | "\(.rateLimitType // "?"): \(.status // "?")"] | unique |
+            "", "Лимит подписки: \(if length == 0 then "событий нет" else join(", ") end)"
+          ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Итог слота (Ш-42): задача, которую прогон не сдвинул, остаётся с
+      # «в-работе»; предупреждение или отказ по лимиту подписки — стоп очереди.
+      # В обоих случаях — комментарий владельцу и сбой слота: следующие
+      # слоты отменяются.
+      - name: Итог слота
+        if: always() && steps.pick.outputs.issue != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.pick.outputs.issue }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          stop=""
+          labels=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          case ",$labels," in *,в-работе,*) stop="прогон кончился, а задача не сдвинулась — метка «в-работе» осталась" ;; esac
+          status=""
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            status=$(jq -r '[.[] | select(.type == "rate_limit_event") | .rate_limit_info.status // empty] | last // ""' "$EXECUTION_FILE")
+          fi
+          case "$status" in allowed_warning|rejected) stop="${stop:+$stop; }лимит подписки близко ($status) — очередь стоит до сброса окна" ;; esac
+          [ -z "$stop" ] && exit 0
+          echo "Стоп очереди: $stop" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh issue comment "$ISSUE" -R "$REPO" --body "Очередь остановлена: $stop. Лог прогона: $RUN_URL. Продолжить — снять \`в-работе\` (и, если нужно, снова поставить \`готово\`). @$OWNER"
+          exit 1
