@@ -30,6 +30,10 @@ on:
       max-turns:
         type: number
         default: 100
+      big-turns:
+        description: Предел ходов задачи с меткой «крупная» (Ш-46)
+        type: number
+        default: 200
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -61,12 +65,15 @@ jobs:
           done
 
       # Выбор задачи и лимиты Ш-07 — до Claude, ходов не тратит. Метка модели
-      # (sonnet, opus) — модель; метка «пара» — прогон пары (Ш-34, Ш-42).
+      # (sonnet, opus) — модель; метка «пара» — прогон пары (Ш-34, Ш-42);
+      # метка «крупная» — большой предел ходов (Ш-46).
       - name: Очередь
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_MODEL: ${{ inputs.model }}
+          DEFAULT_TURNS: ${{ inputs.max-turns }}
+          BIG_TURNS: ${{ inputs.big-turns }}
         run: bash "$RUNNER_TEMP/queue-pick.sh"
 
       - if: steps.pick.outputs.issue != ''
@@ -122,7 +129,7 @@ jobs:
           claude_args: |
             --model ${{ steps.pick.outputs.model }}
             --effort ${{ inputs.effort }}
-            --max-turns ${{ inputs.max-turns }}
+            --max-turns ${{ steps.pick.outputs.turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
             --disallowedTools "Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
 
@@ -140,7 +147,7 @@ jobs:
             "",
             "Модель: ${{ steps.pick.outputs.model }}/${{ inputs.effort }}",
             "",
-            "Ходов: \(.num_turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
+            "Ходов: \(.num_turns) из ${{ steps.pick.outputs.turns }}, минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
             "",
             "Отказано в правах: \(.permission_denials | length)",
             (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")

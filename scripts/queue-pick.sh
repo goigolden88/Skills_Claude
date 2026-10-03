@@ -35,6 +35,9 @@ while IFS=$'\t' read -r num labels deps; do
   [ -n "$num" ] || continue
   model=""
   case ",$labels," in *,sonnet,*) model=sonnet ;; *,opus,*) model=opus ;; esac
+  # Предел ходов (Ш-46): метка «крупная» — большой, иначе — обычный.
+  turns=${DEFAULT_TURNS:-100}
+  case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-200} ;; esac
   pair=no branch="agent/$num"
   case ",$labels," in *,пара,*) pair=yes branch="agent/$num-${model:-opus}" ;; esac
 
@@ -102,7 +105,7 @@ case "$model" in
   *) model_id=$DEFAULT_MODEL ;;
 esac
 
-say "Берём #$issue: модель $model_id, ветка $branch, пара: $pair."
+say "Берём #$issue: модель $model_id, предел ходов $turns, ветка $branch, пара: $pair."
 # «в-работе» — замок и защита от повтора: задачу, которую прогон не сдвинул,
 # следующий слот не возьмёт (Ш-42).
 dry || gh issue edit "$issue" -R "$REPO" --add-label в-работе > /dev/null
@@ -111,3 +114,4 @@ out issue "$issue"
 out model "$model_id"
 out pair "$pair"
 out branch "$branch"
+out turns "$turns"
