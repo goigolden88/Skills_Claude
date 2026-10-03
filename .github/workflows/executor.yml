@@ -20,7 +20,7 @@ on:
       project-tools:
         description: Команды проекта, которые агенту можно запускать
         type: string
-        default: "Bash(npm ci),Bash(npm test),Bash(npm run:*)"
+        default: "Bash(npm ci),Bash(npm test:*),Bash(npm run:*)"
       model:
         type: string
         default: claude-opus-5-5
@@ -110,6 +110,10 @@ jobs:
         with:
           # Токен подписки (claude setup-token); ключ API не заводится (Ш-12, Ш-17).
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Фона нет (Ш-47): без человека фоновая команда умирает через
+          # секунды после последнего ответа агента — прогон кончался без пуша.
+          # Долгая команда теперь упирается в свой таймаут, а не уходит в фон.
+          settings: '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"}}'
           prompt: |
             Репо: ${{ github.repository }}
             Issue: #${{ steps.pick.outputs.issue }}
@@ -151,6 +155,12 @@ jobs:
             "",
             "Отказано в правах: \(.permission_denials | length)",
             (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")
+          ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Последние слова агента (Ш-47): вывод агента Action прячет, а без
+          # них не видно, почему прогон кончился без PR.
+          jq -r '
+            [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "—" |
+            "", "Последние слова агента: \(.[0:300] | gsub("\n"; " "))"
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
           # Событие лимита подписки (Ш-42): статус окна, процента в нём нет.
           jq -r '
