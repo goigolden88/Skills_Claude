@@ -1,0 +1,156 @@
+name: Развязчик (общий)
+
+# Общий workflow развязчика конвейера «Штаб» (Ш-51, Ш-52): проект вызывает
+# его из своего файла агентов, когда слит PR (событие push действие Claude
+# не принимает). Шаг без Claude ищет открытые PR бота с конфликтом; по
+# каждому, по одному, Claude вливает основную ветку и пушит.
+# Правка этого файла меняет развязчика во всех проектах сразу.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Версия Node; пусто — Node не ставится
+        type: string
+        default: ""
+      chrome:
+        description: Готовить Chrome для прогона в браузере
+        type: boolean
+        default: false
+      project-tools:
+        description: Команды проекта, которые агенту можно запускать
+        type: string
+        default: "Bash(npm ci),Bash(npm test:*),Bash(npm run:*)"
+      model:
+        type: string
+        default: claude-opus-5-5
+      effort:
+        type: string
+        default: high
+      max-turns:
+        type: number
+        default: 40
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+env:
+  REPO: ${{ github.repository }}
+  BASE: ${{ github.event.repository.default_branch }}
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      prs: ${{ steps.find.outputs.prs }}
+      count: ${{ steps.find.outputs.count }}
+    steps:
+      - name: PR бота с конфликтом
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/scripts/resolve.sh" -o "$RUNNER_TEMP/resolve.sh" \
+            || curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/scripts/resolve.sh" -o "$RUNNER_TEMP/resolve.sh"
+          bash "$RUNNER_TEMP/resolve.sh" find
+
+  resolver:
+    needs: find
+    if: needs.find.outputs.count != '' && needs.find.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # PR — по одному (Ш-51); сбой одного не отменяет остальные.
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.find.outputs.prs) }}
+    env:
+      PR: ${{ matrix.item.pr }}
+      SHA: ${{ matrix.item.sha }}
+      OWNER: ${{ github.repository_owner }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Файлы развязчика
+        run: |
+          for f in agents/resolver.md scripts/resolve.sh scripts/run-summary.sh; do
+            curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
+              || curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/$f" -o "$RUNNER_TEMP/${f##*/}"
+          done
+          echo "START=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      # Предыдущий PR из списка мог сдвинуть этот — проверить перед Claude.
+      - name: Конфликт ещё есть
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/resolve.sh" check
+
+      - if: steps.check.outputs.go == 'yes'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.item.branch }}
+          fetch-depth: 0
+          submodules: true
+
+      - if: steps.check.outputs.go == 'yes' && inputs.node-version != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - if: steps.check.outputs.go == 'yes' && inputs.chrome
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          timeout 30 google-chrome --headless=new --disable-gpu --dump-dom about:blank > /dev/null 2>&1 || true
+
+      - name: Инструкция развязчика
+        id: instruction
+        if: steps.check.outputs.go == 'yes'
+        run: |
+          {
+            echo 'text<<END_OF_INSTRUCTION'
+            cat "$RUNNER_TEMP/resolver.md"
+            echo 'END_OF_INSTRUCTION'
+          } >> "$GITHUB_OUTPUT"
+
+      # Пушит Claude Code токеном App: пуш токеном Actions не запустил бы CI.
+      - if: steps.check.outputs.go == 'yes'
+        uses: anthropics/claude-code-action@v1
+        id: claude
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          settings: '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"}}'
+          prompt: |
+            Репо: ${{ github.repository }}
+            PR: #${{ matrix.item.pr }}, ветка ${{ matrix.item.branch }}
+            Ветка по умолчанию: ${{ github.event.repository.default_branch }}
+            Владелец: @${{ github.repository_owner }}
+
+            Ты в GitHub Action: клон ветки PR со всей историей и подмодулями готов.
+            Команды разрешены списком: по одной за вызов, без `;`, `&&`, `|`
+            и `cd`. Файлы читай и ищи инструментами Read, Grep, Glob.
+
+            ${{ steps.instruction.outputs.text }}
+          claude_args: |
+            --model ${{ inputs.model }}
+            --effort ${{ inputs.effort }}
+            --max-turns ${{ inputs.max-turns }}
+            --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git push --force-with-lease:*),Bash(git push origin ${{ github.event.repository.default_branch }}:*),Bash(git rebase:*)"
+
+      - name: Итог
+        if: always() && steps.check.outputs.go == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$RUNNER_TEMP/resolve.sh" after
+
+      - name: Замер прогона
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          WHAT: "Развязка: PR #${{ matrix.item.pr }}"
+          MODEL: ${{ inputs.model }}/${{ inputs.effort }}
+          TURNS: ${{ inputs.max-turns }}
+        run: bash "$RUNNER_TEMP/run-summary.sh"

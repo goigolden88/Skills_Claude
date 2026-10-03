@@ -1,0 +1,124 @@
+name: Ревьюер (общий)
+
+# Общий workflow ревьюера конвейера «Штаб» (Ш-49, Ш-50, Ш-52): проект
+# вызывает его из своего файла агентов, когда на PR закончились «Проверки PR»
+# (workflow_run). Ворота и вердикт — шагами без Claude (scripts/review.sh);
+# Claude только читает и отдаёт вердикт ответом заданной формы.
+# Правка этого файла меняет ревьюера во всех проектах сразу.
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        type: string
+        default: claude-opus-5-5
+      effort:
+        type: string
+        default: high
+      max-turns:
+        type: number
+        default: 40
+      big-turns:
+        description: Предел ходов, если у задачи метка «крупная» (Ш-52)
+        type: number
+        default: 80
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  reviewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # Инструкция и скрипты — из этого же репо, той версии, что и workflow.
+      - name: Файлы ревьюера
+        run: |
+          for f in agents/reviewer.md scripts/review.sh scripts/run-summary.sh; do
+            curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
+              || curl -sfL "https://raw.githubusercontent.com/goigolden88/Skills_Claude/main/$f" -o "$RUNNER_TEMP/${f##*/}"
+          done
+
+      # PR бота из этого репо, коммит ещё не проверен, CI зелёный — зовём
+      # Claude; красный CI — вердикт здесь же; иначе — пропуск.
+      - name: Ворота
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DEFAULT_TURNS: ${{ inputs.max-turns }}
+          BIG_TURNS: ${{ inputs.big-turns }}
+        run: bash "$RUNNER_TEMP/review.sh" gate
+
+      # Код вокруг правки — на проверяемом коммите. Код PR не запускается.
+      - if: steps.gate.outputs.pr != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          submodules: true
+          persist-credentials: false
+
+      - name: Инструкция ревьюера
+        id: instruction
+        if: steps.gate.outputs.pr != ''
+        run: |
+          {
+            echo 'text<<END_OF_INSTRUCTION'
+            cat "$RUNNER_TEMP/reviewer.md"
+            echo 'END_OF_INSTRUCTION'
+          } >> "$GITHUB_OUTPUT"
+
+      # Нет вердикта (кончились ходы) — шаг падает; это не сбой ревью:
+      # следующий шаг напишет «не дошёл до вердикта».
+      - if: steps.gate.outputs.pr != ''
+        uses: anthropics/claude-code-action@v1
+        id: claude
+        continue-on-error: true
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # «Проверки PR» на PR бота запустил бот — без этого действие запуск
+          # отклонит. Только наш бот; что PR его, проверили ворота.
+          allowed_bots: claude
+          settings: '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"}}'
+          prompt: |
+            Репо: ${{ github.repository }}
+            PR: #${{ steps.gate.outputs.pr }}
+            Issue: #${{ steps.gate.outputs.issue }}
+            Проверяемый коммит: ${{ github.event.workflow_run.head_sha }}
+
+            Ты в GitHub Action: клон ветки PR на этом коммите готов.
+            Команды разрешены списком: по одной за вызов, без `;`, `&&`, `|`
+            и `cd`. Файлы читай и ищи инструментами Read, Grep, Glob.
+
+            ${{ steps.instruction.outputs.text }}
+          # Только чтение (Ш-52): ни правки, ни коммита, ни записи в GitHub.
+          claude_args: |
+            --model ${{ inputs.model }}
+            --effort ${{ inputs.effort }}
+            --max-turns ${{ steps.gate.outputs.turns }}
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*)"
+            --disallowedTools "Edit,Write,NotebookEdit,Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh api:*),Bash(git push:*),Bash(git commit:*)"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["можно-сливать","не-сливать"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["блокирует","оговорка"]},"text":{"type":"string"}},"required":["severity","text"]}},"advice":{"type":"string"}},"required":["verdict","summary","findings","advice"]}'
+
+      - name: Вердикт
+        if: always() && steps.gate.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.gate.outputs.pr }}
+          RESULT: ${{ steps.claude.outputs.structured_output }}
+        run: bash "$RUNNER_TEMP/review.sh" post
+
+      - name: Замер прогона
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          WHAT: "Ревью: PR #${{ steps.gate.outputs.pr }}, задача #${{ steps.gate.outputs.issue }}"
+          MODEL: ${{ inputs.model }}/${{ inputs.effort }}
+          TURNS: ${{ steps.gate.outputs.turns }}
+        run: bash "$RUNNER_TEMP/run-summary.sh"
