@@ -65,13 +65,14 @@ jobs:
           done
 
       # Выбор задачи и лимиты Ш-07 — до Claude, ходов не тратит. Метка модели
-      # (sonnet, opus) — модель; метка «пара» — прогон пары (Ш-34, Ш-42);
-      # метка «крупная» — большой предел ходов (Ш-46).
+      # (sonnet, opus) — модель; усилия (medium, xhigh) — усилие (Ш-54);
+      # «пара» — прогон пары (Ш-34, Ш-42); «крупная» — большой предел (Ш-46).
       - name: Очередь
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_MODEL: ${{ inputs.model }}
+          DEFAULT_EFFORT: ${{ inputs.effort }}
           DEFAULT_TURNS: ${{ inputs.max-turns }}
           BIG_TURNS: ${{ inputs.big-turns }}
         run: bash "$RUNNER_TEMP/queue-pick.sh"
@@ -132,7 +133,7 @@ jobs:
           # Модель, усилие, ходы — по замерам (Ш-19, Ш-31); проект может задать свои.
           claude_args: |
             --model ${{ steps.pick.outputs.model }}
-            --effort ${{ inputs.effort }}
+            --effort ${{ steps.pick.outputs.effort }}
             --max-turns ${{ steps.pick.outputs.turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
             --disallowedTools "Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
@@ -149,7 +150,7 @@ jobs:
             "",
             "Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}",
             "",
-            "Модель: ${{ steps.pick.outputs.model }}/${{ inputs.effort }}",
+            "Модель: ${{ steps.pick.outputs.model }}/${{ steps.pick.outputs.effort }}",
             "",
             "Ходов: \(.num_turns) из ${{ steps.pick.outputs.turns }}, минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
             "",

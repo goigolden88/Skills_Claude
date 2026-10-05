@@ -2,9 +2,10 @@
 # Очередь исполнителя (Ш-41, Ш-42 Штаба): выбрать следующую задачу и
 # проверить лимиты (Ш-07, Ш-43). Работает до Claude, ходов не тратит.
 #
-# Вход (env): REPO, OWNER, GH_TOKEN, DEFAULT_MODEL; DRY_RUN=1 — только
-# показать выбор, без меток и комментариев.
-# Выход ($GITHUB_OUTPUT): issue, model, pair, branch; issue пусто — работы нет.
+# Вход (env): REPO, OWNER, GH_TOKEN, DEFAULT_MODEL, DEFAULT_EFFORT; DRY_RUN=1 —
+# только показать выбор, без меток и комментариев.
+# Выход ($GITHUB_OUTPUT): issue, model, effort, pair, branch, turns; issue пусто —
+# работы нет.
 set -euo pipefail
 
 BOT=app/claude
@@ -30,16 +31,19 @@ candidates=$(gh issue list -R "$REPO" --state open --label готово --limit 
   | .[]
   | "\(.number)\t\([.labels[].name] | join(","))\t\([(.body // "") | scan("[Пп]осле\\s+#([0-9]+)") | .[0]] | join(","))"')
 
-issue="" pair=no model="" branch=""
+issue="" pair=no model="" effort="" branch=""
 while IFS=$'\t' read -r num labels deps; do
   [ -n "$num" ] || continue
   model=""
   case ",$labels," in *,sonnet,*) model=sonnet ;; *,opus,*) model=opus ;; esac
+  # Усилие (Ш-54): метка medium или xhigh, иначе — из вызова проекта.
+  effort=${DEFAULT_EFFORT:-high}
+  case ",$labels," in *,medium,*) effort=medium ;; *,xhigh,*) effort=xhigh ;; esac
   # Предел ходов (Ш-46): метка «крупная» — большой, иначе — обычный.
   turns=${DEFAULT_TURNS:-100}
   case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-200} ;; esac
   pair=no branch="agent/$num"
-  case ",$labels," in *,пара,*) pair=yes branch="agent/$num-${model:-opus}" ;; esac
+  case ",$labels," in *,пара,*) pair=yes branch="agent/$num-${model:-opus}-$effort" ;; esac
 
   wait=""
   for dep in ${deps//,/ }; do
@@ -105,13 +109,14 @@ case "$model" in
   *) model_id=$DEFAULT_MODEL ;;
 esac
 
-say "Берём #$issue: модель $model_id, предел ходов $turns, ветка $branch, пара: $pair."
+say "Берём #$issue: модель $model_id/$effort, предел ходов $turns, ветка $branch, пара: $pair."
 # «в-работе» — замок и защита от повтора: задачу, которую прогон не сдвинул,
 # следующий слот не возьмёт (Ш-42).
 dry || gh issue edit "$issue" -R "$REPO" --add-label в-работе > /dev/null
 
 out issue "$issue"
 out model "$model_id"
+out effort "$effort"
 out pair "$pair"
 out branch "$branch"
 out turns "$turns"
