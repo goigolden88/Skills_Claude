@@ -32,9 +32,23 @@ set_label() {
   [ -z "$label" ] || gh api "repos/$REPO/issues/$pr/labels" -f "labels[]=$label" > /dev/null
 }
 
-# Комментарий в PR: в сухом прогоне — только показать.
+# Прошлые вердикты запуска — свернуть как устаревшие: на телефоне виден
+# только вердикт последнего коммита. Не вышло — не беда, вердикт важнее.
+hide_old() {
+  local pr=$1 id
+  for id in $(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
+    --jq ".[] | select(.user.login == \"$ACTIONS_BOT\" and (.body | contains(\"<!-- ревьюер:\"))) | .node_id"); do
+    if dry; then echo "--- свернуть старый вердикт $id ---"; continue; fi
+    gh api graphql -f query="mutation { minimizeComment(input: {subjectId: \"$id\", classifier: OUTDATED}) { clientMutationId } }" \
+      > /dev/null 2>&1 || true
+  done
+}
+
+# Комментарий в PR: в сухом прогоне — только показать. Старые вердикты
+# перед новым сворачиваются.
 comment() {
   local pr=$1 body=$2
+  hide_old "$pr"
   if dry; then
     printf -- '--- комментарий в PR #%s ---\n%s\n---\n' "$pr" "$body"
   else
@@ -44,6 +58,11 @@ comment() {
 
 footer() {
   printf '<sub>Проверен коммит %s · [лог](%s)</sub>\n<!-- ревьюер: %s -->' "${1:0:7}" "$RUN_URL" "$1"
+}
+
+# Строка повторной проверки (Ш-53): ветка изменилась после проверенного коммита.
+again() {
+  [ -z "${1:-}" ] || printf '_Повторная проверка: ветка изменилась после проверки коммита %s._' "${1:0:7}"
 }
 
 gate() {
@@ -78,9 +97,13 @@ gate() {
 
   # Повтор (Ш-49): коммит уже проверен — пропуск. Отметку берём только из
   # комментариев запуска: посторонний в публичном репо её не подделает.
-  local seen
-  seen=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" \
-    --jq "[.[] | select(.user.login == \"$ACTIONS_BOT\") | .body | capture(\"<!-- ревьюер: (?<sha>[0-9a-f]+) -->\").sha] | last // \"\"")
+  # Прошлый вердикт — коммит и итог: они нужны повторной проверке (Ш-53).
+  local last seen prev_verdict
+  last=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --jq "
+    [.[] | select(.user.login == \"$ACTIONS_BOT\") | .body | select(test(\"<!-- ревьюер: [0-9a-f]+ -->\"))
+     | (capture(\"<!-- ревьюер: (?<sha>[0-9a-f]+) -->\").sha) + \"\t\" + (if startswith(\"**Не сливать**\") then \"$NO\" else \"$OK\" end)]
+    | last // \"\"")
+  IFS=$'\t' read -r seen prev_verdict <<< "$last"
   if [ "$seen" = "$HEAD_SHA" ]; then
     say "PR #$pr: коммит ${HEAD_SHA:0:7} уже проверен — пропуск."
     return
@@ -91,7 +114,9 @@ gate() {
     failure|timed_out)
       say "PR #$pr: проверки красные ($CONCLUSION) — «Не сливать» без Claude."
       comment "$pr" "**Не сливать**
-
+${seen:+
+$(again "$seen")
+}
 Автоматические проверки не прошли — сборка или тесты красные. Ревьюер такой PR не читает.
 
 Совет: посмотреть, что упало, и доработать или закрыть.
@@ -113,10 +138,12 @@ $(footer "$HEAD_SHA")"
   fi
   case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-80} ;; esac
 
-  say "PR #$pr (задача #${issue:-?}), коммит ${HEAD_SHA:0:7}: зовём ревьюера, предел ходов $turns."
+  say "PR #$pr (задача #${issue:-?}), коммит ${HEAD_SHA:0:7}: зовём ревьюера, предел ходов $turns.${seen:+ Повторно: прошлый — ${seen:0:7}, $prev_verdict.}"
   out pr "$pr"
   out issue "$issue"
   out turns "$turns"
+  out prev "$seen"
+  out prev_verdict "$prev_verdict"
 }
 
 post() {
@@ -135,12 +162,13 @@ post() {
   local verdict body
   verdict=$(jq -r --arg ok "$OK" --arg no "$NO" '
     if (.verdict == $no) or any(.findings[]?; .severity == "блокирует") then $no else $ok end' <<< "$RESULT")
-  body=$(jq -r --arg v "$verdict" --arg no "$NO" '
+  body=$(jq -r --arg v "$verdict" --arg no "$NO" --arg again "$(again "${PREV:-}")" '
     ([.findings[]? | select(.severity == "блокирует") | "- \(.text)"]) as $block
     | ([.findings[]? | select(.severity != "блокирует") | "- \(.text)"]) as $warn
     | [ (if $v == $no then "**Не сливать**"
          elif ($warn | length) > 0 then "**Можно сливать** — с оговоркой"
          else "**Можно сливать**" end),
+        (if $again != "" then "", $again else empty end),
         "",
         (.summary // ""),
         (if ($block | length) > 0 then "", "**Блокирует:**", $block[] else empty end),

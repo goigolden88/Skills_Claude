@@ -57,10 +57,12 @@ jobs:
         run: bash "$RUNNER_TEMP/review.sh" gate
 
       # Код вокруг правки — на проверяемом коммите. Код PR не запускается.
+      # История целиком — повторной проверке (Ш-53) нужен прошлый коммит.
       - if: steps.gate.outputs.pr != ''
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
           submodules: true
           persist-credentials: false
 
@@ -91,6 +93,7 @@ jobs:
             PR: #${{ steps.gate.outputs.pr }}
             Issue: #${{ steps.gate.outputs.issue }}
             Проверяемый коммит: ${{ github.event.workflow_run.head_sha }}
+            ${{ steps.gate.outputs.prev != '' && format('Повторная проверка: прошлый проверенный коммит {0}, вердикт по нему — {1}. См. «Повторная проверка» в инструкции.', steps.gate.outputs.prev, steps.gate.outputs.prev_verdict) || '' }}
 
             Ты в GitHub Action: клон ветки PR на этом коммите готов.
             Команды разрешены списком: по одной за вызов, без `;`, `&&`, `|`
@@ -111,6 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.gate.outputs.pr }}
+          PREV: ${{ steps.gate.outputs.prev }}
           RESULT: ${{ steps.claude.outputs.structured_output }}
         run: bash "$RUNNER_TEMP/review.sh" post
 
