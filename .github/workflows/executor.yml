@@ -125,12 +125,17 @@ jobs:
             Ты в GitHub Action: клон с подмодулями готов. Ветку назови
             ${{ steps.pick.outputs.branch }}. Метку `в-работе` поставил запуск.
             Метки, комментарии и PR — через gh.
-            Команды разрешены списком: запускай по одной за вызов, без `;`, `&&`,
-            `|` и `cd` — составную команду запуск отклонит, и ход пропадёт. Файлы
-            читай и ищи инструментами Read, Grep, Glob, а не cat, grep, ls.
+            Команды разрешены списком: ${{ inputs.project-tools }}, git, gh issue
+            view/edit/comment, gh pr list/view/diff/create, gh label list. Других
+            нет (npx, node, sed, python, вывод в файл через `>`): запуск отклонит,
+            и ход пропадёт; вместо них — скрипты проекта из списка. Запускай по
+            одной за вызов, без `;`, `&&`, `|` и `cd`. Файлы читай и ищи
+            инструментами Read, Grep, Glob, правь — Edit, а не cat, grep, ls, sed.
 
             ${{ steps.instruction.outputs.text }}
           # Модель, усилие, ходы — по замерам (Ш-19, Ш-31); проект может задать свои.
+          # Список --allowedTools повторён в промпте выше (ретро 07.10): правишь
+          # один — правь и другой.
           claude_args: |
             --model ${{ steps.pick.outputs.model }}
             --effort ${{ steps.pick.outputs.effort }}
@@ -154,9 +159,22 @@ jobs:
             "",
             "Ходов: \(.num_turns) из ${{ steps.pick.outputs.turns }}, минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
             "",
+            "Оценка, $: \(.total_cost_usd // "?")",
+            "",
             "Отказано в правах: \(.permission_denials | length)",
             (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Замер — ещё и аннотацией задания: её отдаёт REST, а логи из облачной
+          # сессии не читаются (ретро 07.10, Ш-68). Одна строка, `%` экранирован.
+          jq -r '
+            [.[] | select(.type == "result")] | last |
+            ["Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}",
+             "Модель: ${{ steps.pick.outputs.model }}/${{ steps.pick.outputs.effort }}",
+             "Ходов: \(.num_turns) из ${{ steps.pick.outputs.turns }}, минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
+             "Оценка, $: \(.total_cost_usd // "?")",
+             "Отказано в правах: \(.permission_denials | length)"]
+            | join(" | ") | gsub("%"; "%25") | "::notice title=Замер прогона::\(.)"
+          ' "${{ steps.claude.outputs.execution_file }}"
           # Последние слова агента (Ш-47): вывод агента Action прячет, а без
           # них не видно, почему прогон кончился без PR.
           jq -r '

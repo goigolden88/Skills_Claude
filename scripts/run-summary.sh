@@ -20,6 +20,8 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
     "",
     "Ходов: \(.num_turns) из \($turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
     "",
+    "Оценка, $: \(.total_cost_usd // "?")",
+    "",
     "Отказано в правах: \(.permission_denials | length)",
     (.permission_denials[]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:120])")
   ' "$EXECUTION_FILE"
@@ -32,3 +34,14 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
     "", "Лимит подписки: \(if length == 0 then "событий нет" else join(", ") end)"
   ' "$EXECUTION_FILE"
 } | tee -a "$summary"
+
+# Замер — ещё и аннотацией задания: её отдаёт REST, логи из облака — нет
+# (ретро 07.10, Ш-68). Вне `tee`, чтобы не попасть в сводку шага.
+jq -r --arg what "$WHAT" --arg model "$MODEL" --arg turns "$TURNS" '
+  [.[] | select(.type == "result")] | last |
+  [$what, "Модель: \($model)",
+   "Ходов: \(.num_turns) из \($turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
+   "Оценка, $: \(.total_cost_usd // "?")",
+   "Отказано в правах: \(.permission_denials | length)"]
+  | join(" | ") | gsub("%"; "%25") | "::notice title=Замер прогона::\(.)"
+' "$EXECUTION_FILE"
