@@ -170,7 +170,7 @@ jobs:
           # кончился без PR (ретро 08.10).
           jq -r '
             ([.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "—"
-              | .[0:200] | gsub("\n"; " ") | gsub(" \\| "; " / ")) as $words |
+              | .[0:200] | gsub("[\r\n]+"; " ") | gsub("\\|"; "/")) as $words |
             [.[] | select(.type == "result")] | last |
             ["Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}",
              "Модель: ${{ steps.pick.outputs.model }}/${{ steps.pick.outputs.effort }}",
