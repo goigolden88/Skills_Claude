@@ -20,6 +20,9 @@ NO=не-сливать
 out() { echo "$1=$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
 say() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
 dry() { [ "${DRY_RUN:-}" = 1 ]; }
+# Запись в GitHub — с повтором: сбой GitHub 07.10 снял вердикт целиком
+# (ретро 08.10). Три попытки, 20 с между ними.
+retry() { local i; for i in 1 2 3; do "$@" && return 0; [ "$i" = 3 ] || sleep "${RETRY_PAUSE:-20}"; done; return 1; }
 
 # Метка вердикта: одна из двух; пусто — снять обе. Отсутствующую метку API
 # снимать отказывается — это не ошибка.
@@ -29,7 +32,7 @@ set_label() {
     [ "$l" = "$label" ] && continue
     gh api -X DELETE "repos/$REPO/issues/$pr/labels/$l" > /dev/null 2>&1 || true
   done
-  [ -z "$label" ] || gh api "repos/$REPO/issues/$pr/labels" -f "labels[]=$label" > /dev/null
+  [ -z "$label" ] || retry gh api "repos/$REPO/issues/$pr/labels" -f "labels[]=$label" > /dev/null
 }
 
 # Прошлые вердикты запуска — свернуть как устаревшие: на телефоне виден
@@ -52,7 +55,7 @@ comment() {
   if dry; then
     printf -- '--- комментарий в PR #%s ---\n%s\n---\n' "$pr" "$body"
   else
-    gh pr comment "$pr" -R "$REPO" --body "$body" > /dev/null
+    retry gh pr comment "$pr" -R "$REPO" --body "$body" > /dev/null
   fi
 }
 

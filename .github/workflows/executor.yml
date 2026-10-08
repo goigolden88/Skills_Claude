@@ -166,13 +166,18 @@ jobs:
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
           # Замер — ещё и аннотацией задания: её отдаёт REST, а логи из облачной
           # сессии не читаются (ретро 07.10, Ш-68). Одна строка, `%` экранирован.
+          # Последние слова — и здесь: без них ретро не видит, почему прогон
+          # кончился без PR (ретро 08.10).
           jq -r '
+            ([.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "—"
+              | .[0:200] | gsub("\n"; " ") | gsub(" \\| "; " / ")) as $words |
             [.[] | select(.type == "result")] | last |
             ["Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}",
              "Модель: ${{ steps.pick.outputs.model }}/${{ steps.pick.outputs.effort }}",
              "Ходов: \(.num_turns) из ${{ steps.pick.outputs.turns }}, минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
              "Оценка, $: \(.total_cost_usd // "?")",
-             "Отказано в правах: \(.permission_denials | length)"]
+             "Отказано в правах: \(.permission_denials | length)",
+             "Последние слова агента: \($words)"]
             | join(" | ") | gsub("%"; "%25") | "::notice title=Замер прогона::\(.)"
           ' "${{ steps.claude.outputs.execution_file }}"
           # Последние слова агента (Ш-47): вывод агента Action прячет, а без
@@ -186,6 +191,24 @@ jobs:
             [.[] | select(.type == "rate_limit_event") | .rate_limit_info // {} | "\(.rateLimitType // "?"): \(.status // "?")"] | unique |
             "", "Лимит подписки: \(if length == 0 then "событий нет" else join(", ") end)"
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Сделанное — на GitHub, даже если агент не смог запушить (ретро 08.10:
+      # GitHub 5 минут не принимал запись — ветка из 59 ходов пропала).
+      # Только вперёд, без force; следующий прогон продолжит ветку (шаг 7).
+      - name: Сохранить ветку
+        if: always() && steps.pick.outputs.issue != ''
+        env:
+          BRANCH: ${{ steps.pick.outputs.branch }}
+          BASE: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git rev-parse -q --verify "refs/heads/$BRANCH" > /dev/null || exit 0
+          [ "$(git rev-list --count "$BASE..$BRANCH")" -gt 0 ] || exit 0
+          for i in 1 2 3; do
+            git push -q "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "refs/heads/$BRANCH:refs/heads/$BRANCH" && exit 0
+            sleep 30
+          done
+          echo "::warning title=Ветка не сохранена::$BRANCH — GitHub не принял пуш"
 
       # Итог слота (Ш-42): задача, которую прогон не сдвинул, остаётся с
       # «в-работе»; предупреждение или отказ по лимиту подписки — стоп очереди.
