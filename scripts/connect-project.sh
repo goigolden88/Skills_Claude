@@ -171,5 +171,5 @@ say "  1. Доступ Claude к репо: github.com/settings/installations →
 say "  2. Секрет: github.com/$REPO/settings/secrets/actions → CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)"
 [ -n "$PR_URL" ] && say "  3. Слить $PR_URL — после того, как сессия допишет раздел «Для конвейера»"
 say "### Сессии Штаба"
-say "  строка в docs/проекты.md: | ${REPO#*/} | <проект> | да | приложение | новичок |"
+say "  карточка в каталоге Штаба: python3 scripts/projects.py --new ${REPO#*/} --group <группа> (Ш-80)"
 say "  хостам ретро и аналитика репо подключает человек словом в самом хосте (Ш-76)"
