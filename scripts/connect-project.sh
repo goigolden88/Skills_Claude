@@ -79,8 +79,7 @@ done <<<"$LABELS"
 
 # ─── Файлы ─────────────────────────────────────────────────────────────────
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
-REF=$BASE
-# Содержимое файла в основной ветке; нет — пусто, код 1.
+# Содержимое файла в основной ветке; нет — пусто, код 1. Чтение — API, запись — git.
 remote() { [ $EMPTY = no ] && gh api "repos/$REPO/contents/$1?ref=$BASE" --jq .content 2>/dev/null | base64 -d; }
 exists() { [ $EMPTY = no ] && gh api "repos/$REPO/contents/$1?ref=$BASE" >/dev/null 2>&1; }
 
@@ -121,18 +120,18 @@ fi
 
 PR_URL=""
 if [ ${#FILES[@]} -gt 0 ] && act "записать ${#FILES[@]} файл(а)$([ $EMPTY = no ] && echo " веткой $BRANCH и PR")"; then
-  if [ $EMPTY = no ]; then
-    sha=$(gh api "repos/$REPO/git/ref/heads/$BASE" --jq .object.sha)
-    gh api "repos/$REPO/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" >/dev/null
-    REF=$BRANCH
-  fi
-  for f in "${FILES[@]}"; do
-    args=(-X PUT "repos/$REPO/contents/$f" -f message="Конвейер «Штаб»: $f" -f branch="$REF"
-          -f content="$(base64 -w0 < "$WORK/$f")")
-    old=$( [ $EMPTY = no ] && gh api "repos/$REPO/contents/$f?ref=$REF" --jq .sha 2>/dev/null || true)
-    [ -n "$old" ] && args+=(-f sha="$old")
-    gh api "${args[@]}" >/dev/null
-  done
+  # Файлы — через git, не через API содержимого: облачный прокси пускает
+  # запись только пушем (проба на Magic_Fishki, 09.10).
+  CLONE="$WORK/.clone"
+  git clone -q --depth 1 "https://github.com/$REPO" "$CLONE" 2>/dev/null
+  [ $EMPTY = no ] && git -C "$CLONE" checkout -q -b "$BRANCH"
+  [ $EMPTY = yes ] && git -C "$CLONE" checkout -q -b "$BASE"
+  for f in "${FILES[@]}"; do mkdir -p "$CLONE/$(dirname "$f")"; cp "$WORK/$f" "$CLONE/$f"; done
+  git -C "$CLONE" add -- "${FILES[@]}"
+  git -C "$CLONE" -c user.name="${GIT_AUTHOR_NAME:-$(git config user.name || echo Shtab)}" \
+    -c user.email="${GIT_AUTHOR_EMAIL:-$(git config user.email || echo shtab@localhost)}" \
+    commit -q -m "Подключение к конвейеру «Штаб»: метки, «Задача», «Агенты», «Проверки PR», «Для конвейера»"
+  git -C "$CLONE" push -q origin "HEAD:refs/heads/$([ $EMPTY = yes ] && echo "$BASE" || echo "$BRANCH")"
   if [ $EMPTY = no ]; then
     PR_URL=$(gh api "repos/$REPO/pulls" -f head="$BRANCH" -f base="$BASE" \
       -f title="Подключение к конвейеру «Штаб»" \
