@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --node) NODE=$2; shift 2 ;;
     --chrome) CHROME=true; shift ;;
-    --tools) TOOLS=$2; shift 2 ;;
+    --tools) TOOLS=$2; TOOLS_SET=yes; shift 2 ;;
     --protect) PROTECT=yes; shift ;;
     --checks) CHECKS=$2; shift 2 ;;
     *) usage ;;
@@ -46,6 +46,10 @@ BASE=$(jq -r .default_branch <<<"$info")
 EMPTY=no
 gh api "repos/$REPO/git/ref/heads/$BASE" >/dev/null 2>&1 || EMPTY=yes
 say "## $REPO — основная ветка $BASE$([ $EMPTY = yes ] && echo ', репо пустой')"
+# Пустой репо: первой задаче нужен `npm install` — завести зависимости и
+# package-lock.json; без него исполнитель встанет (Magic_Fishki#2).
+TOOLS_SET=${TOOLS_SET:-no}
+[ $EMPTY = yes ] && [ "$TOOLS_SET" = no ] && TOOLS="$TOOLS,Bash(npm install:*)"
 
 # ─── Метки ─────────────────────────────────────────────────────────────────
 # Имя | цвет | описание — как в проектах семьи.
