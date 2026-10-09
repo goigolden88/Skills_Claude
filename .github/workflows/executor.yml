@@ -86,7 +86,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: npm
+          # Кеш — только при package-lock.json: в новом репо без него setup-node падает (Magic_Fishki#2).
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
 
       # Ubuntu 24.04 может не пустить Chrome в его песочницу; первый запуск
       # на чистой машине долгий — прогрев, чтобы прогон не падал не из-за кода.
