@@ -234,3 +234,28 @@ jobs:
           echo "Стоп очереди: $stop" | tee -a "$GITHUB_STEP_SUMMARY"
           gh issue comment "$ISSUE" -R "$REPO" --body "Очередь остановлена: $stop. Лог прогона: $RUN_URL. Продолжить — снять \`в-работе\` (и, если нужно, снова поставить \`готово\`). @$OWNER"
           exit 1
+
+  # После очереди — тот же развязчик, что и по слиянию (Ш-51): PR, открытый
+  # после слияния, с которым он конфликтует, иначе никто не развяжет —
+  # развязчик зовётся только слиянием, а «Проверки PR» на PR с конфликтом
+  # не запускаются, и ревьюер его не видит (DeluVremya#51, 07.10). Без
+  # конфликтов — только поиск, без Claude. Группа «resolver» общая с
+  # развязчиком проекта: два сразу не идут.
+  resolver:
+    needs: executor
+    if: ${{ !cancelled() }}
+    concurrency:
+      group: resolver
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: goigolden88/Skills_Claude/.github/workflows/resolver.yml@main
+    with:
+      node-version: ${{ inputs.node-version }}
+      chrome: ${{ inputs.chrome }}
+      project-tools: ${{ inputs.project-tools }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
