@@ -84,7 +84,7 @@ REF=$BASE
 remote() { [ $EMPTY = no ] && gh api "repos/$REPO/contents/$1?ref=$BASE" --jq .content 2>/dev/null | base64 -d; }
 exists() { [ $EMPTY = no ] && gh api "repos/$REPO/contents/$1?ref=$BASE" >/dev/null 2>&1; }
 
-FILES=()   # путь в репо → файл в $WORK с тем же относительным путём
+FILES=()   # путь в репо → файл в $WORK; put_file — только с `< файл` или `< <(…)`: в конвейере FILES теряется
 put_file() { mkdir -p "$WORK/$(dirname "$1")"; cat > "$WORK/$1"; FILES+=("$1"); }
 fill() { sed -e "s|@NODE@|$NODE|g" -e "s|@CHROME@|$CHROME|g" -e "s|@TOOLS@|$TOOLS|g" "$1"; }
 
@@ -93,7 +93,7 @@ if exists ".github/ISSUE_TEMPLATE/задача.md"; then say "  шаблон «�
 else put_file ".github/ISSUE_TEMPLATE/задача.md" < "$TPL/issue-task.md"; say "  + шаблон «Задача»"; fi
 
 if exists ".github/workflows/executor.yml"; then say "  файл «Агенты» уже есть — не трогаю"
-else fill "$TPL/agents.yml" | put_file ".github/workflows/executor.yml"; say "  + файл «Агенты» (node «$NODE», chrome $CHROME)"; fi
+else put_file ".github/workflows/executor.yml" < <(fill "$TPL/agents.yml"); say "  + файл «Агенты» (node «$NODE», chrome $CHROME)"; fi
 
 OWN_CI=no
 if [ $EMPTY = no ]; then
@@ -104,7 +104,7 @@ fi
 if [ $OWN_CI = yes ]; then
   say "  «Проверки PR» уже есть"
 elif [ -n "$NODE" ]; then
-  fill "$TPL/ci-node.yml" | put_file ".github/workflows/ci.yml"; say "  + «Проверки PR» по шаблону Node"
+  put_file ".github/workflows/ci.yml" < <(fill "$TPL/ci-node.yml"); say "  + «Проверки PR» по шаблону Node"
   [ -n "$CHECKS" ] || CHECKS="Тесты и сборка"
 else
   say "  ! «Проверок PR» нет, а --node не задан: их пишет сессия под стек проекта — без них нет ревьюера"
@@ -113,9 +113,9 @@ fi
 claude_md=$(remote CLAUDE.md || true)
 if grep -q '^## Для конвейера' <<<"$claude_md"; then say "  раздел «Для конвейера» уже есть"
 else
-  { if [ -n "$claude_md" ]; then printf '%s\n' "$claude_md"
+  put_file CLAUDE.md < <(if [ -n "$claude_md" ]; then printf '%s\n' "$claude_md"
     else printf '# CLAUDE.md\n\n<!-- что это за проект, стек, как работать -->\n'; fi
-    cat "$TPL/pipeline-section.md"; } | put_file CLAUDE.md
+    cat "$TPL/pipeline-section.md")
   say "  + раздел «Для конвейера» в CLAUDE.md — заготовку дописывает сессия"
 fi
 
