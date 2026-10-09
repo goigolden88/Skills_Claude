@@ -161,7 +161,8 @@ else
     conditions:{ref_name:{include:["~DEFAULT_BRANCH"],exclude:[]}},
     bypass_actors:[{actor_id:5,actor_type:"RepositoryRole",bypass_mode:"always"}],rules:$r}')
   act "набор правил «main»: только через PR${CHECKS:+, проверки: $CHECKS}" \
-    && gh api -X POST "repos/$REPO/rulesets" --input - <<<"$body" >/dev/null || true
+    && { gh api -X POST "repos/$REPO/rulesets" --input - <<<"$body" >/dev/null 2>&1 \
+      || say "  ! не вышло (облачный прокси правила веток не пускает) — руками: github.com/$REPO/settings/rules → New branch ruleset: имя main, Active, Target — Include default branch; Restrict deletions, Require a pull request (0 одобрений), Require status checks${CHECKS:+ — $CHECKS}, Block force pushes; Bypass — Repository admin"; } || true
 fi
 
 # ─── Что осталось человеку ─────────────────────────────────────────────────
