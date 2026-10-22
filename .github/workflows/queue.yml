@@ -238,10 +238,14 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           DEFAULT_MODEL: ${{ inputs.model }}
-          LAST_SLOT: ${{ strategy.job-index == strategy.job-total - 1 }}
+          # Арифметики в выражениях GitHub нет — последний слот считает shell.
+          JOB_INDEX: ${{ strategy.job-index }}
+          JOB_TOTAL: ${{ strategy.job-total }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           stop=""
+          LAST_SLOT=false
+          if [ $((JOB_INDEX + 1)) -eq "$JOB_TOTAL" ]; then LAST_SLOT=true; fi
           labels=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           case ",$labels," in *,в-работе,*) stop="прогон кончился, а задача не сдвинулась — метка «в-работе» осталась" ;; esac
           status=""
