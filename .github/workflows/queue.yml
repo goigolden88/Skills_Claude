@@ -227,9 +227,9 @@ jobs:
           echo "::warning title=Ветка не сохранена::$BRANCH — GitHub не принял пуш"
 
       # Итог слота (Ш-42): задача, которую прогон не сдвинул, остаётся с
-      # «в-работе»; предупреждение или отказ по лимиту подписки — стоп очереди.
-      # В обоих случаях — комментарий владельцу и сбой слота: следующие
-      # слоты отменяются.
+      # «в-работе»; отказ по лимиту подписки — стоп очереди; предупреждение —
+      # стоп, только если ждёт следующая задача (ретро 22.10). При стопе —
+      # комментарий владельцу и сбой слота: следующие слоты отменяются.
       - name: Итог слота
         if: always() && steps.pick.outputs.issue != ''
         env:
@@ -237,6 +237,8 @@ jobs:
           ISSUE: ${{ steps.pick.outputs.issue }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          DEFAULT_MODEL: ${{ inputs.model }}
+          LAST_SLOT: ${{ strategy.job-index == strategy.job-total - 1 }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           stop=""
@@ -254,7 +256,25 @@ jobs:
             seven_day*) reset="до сброса недельного лимита (это может быть несколько дней)" ;;
             *) reset="до сброса лимита" ;;
           esac
-          case "$status" in allowed_warning|rejected) stop="${stop:+$stop; }лимит подписки близко ($status${kind:+, $kind}) — очередь стоит $reset" ;; esac
+          limit="лимит подписки близко ($status${kind:+, $kind}) — очередь стоит $reset"
+          target=$ISSUE
+          case "$status" in
+            rejected) stop="${stop:+$stop; }$limit" ;;
+            allowed_warning)
+              if [ -n "$stop" ]; then stop="$stop; $limit"
+              elif [ "$LAST_SLOT" = true ]; then
+                echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — задача #$ISSUE сделана, слот последний"
+              else
+                # Задача сдвинулась: стоп нужен, только если ждёт следующая —
+                # её показывает очередь без меток (DRY_RUN). Сбой показа — стоп.
+                : > "$RUNNER_TEMP/next"
+                if DRY_RUN=1 GITHUB_OUTPUT="$RUNNER_TEMP/next" GITHUB_STEP_SUMMARY=/dev/null bash "$RUNNER_TEMP/queue-pick.sh" > /dev/null; then
+                  next=$(sed -n 's/^issue=//p' "$RUNNER_TEMP/next")
+                  if [ -n "$next" ]; then stop="$limit"; target=$next
+                  else echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — задача #$ISSUE сделана, очередь пуста"; fi
+                else stop="$limit"; fi
+              fi ;;
+          esac
           # Шаг Claude упал, а задача сдвинулась (метки сняты) — обычно предел
           # ходов превышен у сделанной работы: не стоп, а заметка в замере.
           if [ -z "$stop" ] && [ "$CLAUDE_OUTCOME" = "failure" ]; then
@@ -262,6 +282,8 @@ jobs:
           fi
           [ -z "$stop" ] && exit 0
           echo "Стоп очереди: $stop" | tee -a "$GITHUB_STEP_SUMMARY"
-          gh issue comment "$ISSUE" -R "$REPO" --body "Очередь остановлена: $stop. Лог прогона: $RUN_URL. Продолжить — снять \`в-работе\` (и, если нужно, снова поставить \`готово\`). @$OWNER"
+          if [ "$target" = "$ISSUE" ]; then how="снять \`в-работе\` (и, если нужно, снова поставить \`готово\`)"
+          else how="задача #$ISSUE сделана, эта ждёт; снять и снова поставить \`готово\`"; fi
+          gh issue comment "$target" -R "$REPO" --body "Очередь остановлена: $stop. Лог прогона: $RUN_URL. Продолжить — $how. @$OWNER"
           exit 1
 
