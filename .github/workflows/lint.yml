@@ -1,0 +1,17 @@
+# Проверка workflow до слияния (ретро 29.10 Штаба): выражение в queue.yml
+# из #27 GitHub не разобрал, и все запуски исполнителя падали до старта.
+name: Проверка workflow
+on:
+  pull_request:
+    paths: ['.github/workflows/**']
+permissions:
+  contents: read
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker://rhysd/actionlint:1.7.7
+        with:
+          # actionlint не знает job.workflow_* (Ш-134 Штаба).
+          args: -color -shellcheck= -pyflakes= -ignore=workflow_(repository|sha)
