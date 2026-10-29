@@ -240,7 +240,7 @@ jobs:
           DEFAULT_MODEL: ${{ inputs.model }}
           # Арифметики в выражениях GitHub нет — последний слот считает shell.
           JOB_INDEX: ${{ strategy.job-index }}
-          JOB_TOTAL: ${{ strategy.job-total - 1 }}
+          JOB_TOTAL: ${{ strategy.job-total }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           stop=""
