@@ -27,12 +27,14 @@ say ""
 
 # Кандидаты: «готово» без «в-работе» и «нужно-решение»; порядок — p1, p2, p3,
 # без p, при равных — старший issue. Строка: номер, метки, «после #N».
+# «После #N» — только из строки «Очередь: после #N»; в остальном тексте —
+# просто слова (ретро 05.11: #126 и #127 ждали друг друга 73 мин).
 candidates=$(gh issue list -R "$REPO" --state open --label готово --limit 100 \
   --json number,labels,body --jq '
   map(select(any(.labels[]; .name == "в-работе" or .name == "нужно-решение") | not))
   | sort_by([([.labels[].name | select(test("^p[1-3]$"))] | sort | .[0] // "p9"), .number])
   | .[]
-  | "\(.number)\t\([.labels[].name] | join(","))\t\([(.body // "") | scan("[Пп]осле\\s+#([0-9]+)") | .[0]] | join(","))"')
+  | "\(.number)\t\([.labels[].name] | join(","))\t\([(.body // "") | split("\n")[] | select(test("Очередь")) | scan("[Пп]осле\\s+#([0-9]+)") | .[0]] | join(","))"')
 
 issue="" pair=no model="" effort="" branch="" over=no
 while IFS=$'\t' read -r num labels deps; do
