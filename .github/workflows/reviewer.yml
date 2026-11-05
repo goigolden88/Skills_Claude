@@ -38,7 +38,11 @@ jobs:
       # Инструкция и скрипты — из этого же репо, той версии, что и workflow.
       # Репо — тот, где лежит workflow (job.workflow_repository): у форка —
       # форк, не goigolden88 (Ш-134). Запасной путь — его же main, с предупреждением.
+      # Хеши скриптов — в выход шага: Claude его не перепишет. Шаги после
+      # Claude сверяют их перед запуском (ретро 05.11: `git log --output`
+      # может записать файл, а «Вердикт» идёт с правом записи).
       - name: Файлы ревьюера
+        id: files
         env:
           SRC: https://raw.githubusercontent.com/${{ job.workflow_repository }}
         run: |
@@ -47,6 +51,11 @@ jobs:
               || { echo "::warning::$f — с main ${{ job.workflow_repository }}: по коммиту workflow не скачался"
                    curl -sfL "$SRC/main/$f" -o "$RUNNER_TEMP/${f##*/}"; }
           done
+          {
+            echo 'sums<<END_OF_SUMS'
+            (cd "$RUNNER_TEMP" && sha256sum review.sh run-summary.sh)
+            echo 'END_OF_SUMS'
+          } >> "$GITHUB_OUTPUT"
 
       # PR бота из этого репо, коммит ещё не проверен, CI зелёный — зовём
       # Claude; красный CI — вердикт здесь же; иначе — пропуск.
@@ -121,7 +130,10 @@ jobs:
           PR: ${{ steps.gate.outputs.pr }}
           PREV: ${{ steps.gate.outputs.prev }}
           RESULT: ${{ steps.claude.outputs.structured_output }}
-        run: bash "$RUNNER_TEMP/review.sh" post
+          SUMS: ${{ steps.files.outputs.sums }}
+        run: |
+          (cd "$RUNNER_TEMP" && sha256sum -c --quiet <<< "$SUMS") || { echo "::error::скрипт ревьюера изменён после шага Claude — вердикт не ставлю"; exit 1; }
+          bash "$RUNNER_TEMP/review.sh" post
 
       - name: Замер прогона
         if: always() && steps.claude.outputs.execution_file != ''
@@ -130,4 +142,7 @@ jobs:
           WHAT: "Ревью: PR #${{ steps.gate.outputs.pr }}, задача #${{ steps.gate.outputs.issue }}"
           MODEL: ${{ inputs.model }}/${{ inputs.effort }}
           TURNS: ${{ steps.gate.outputs.turns }}
-        run: bash "$RUNNER_TEMP/run-summary.sh"
+          SUMS: ${{ steps.files.outputs.sums }}
+        run: |
+          (cd "$RUNNER_TEMP" && sha256sum -c --quiet <<< "$SUMS") || { echo "::error::скрипт ревьюера изменён после шага Claude — вердикт не ставлю"; exit 1; }
+          bash "$RUNNER_TEMP/run-summary.sh"
