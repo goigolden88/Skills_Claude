@@ -42,6 +42,7 @@ jq -r --arg what "$WHAT" --arg model "$MODEL" --arg turns "$TURNS" '
   [$what, "Модель: \($model)",
    "Ходов: \(.num_turns) из \($turns), минут: \((.duration_ms / 60000 * 10 | floor) / 10)",
    "Оценка, $: \(.total_cost_usd // "?")",
-   "Отказано в правах: \(.permission_denials | length)"]
+   "Отказано в правах: \(.permission_denials | length)",
+   (.permission_denials[:3][]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:80] | gsub("[\r\n]+"; " ") | gsub("\\|"; "¦"))")]
   | join(" | ") | gsub("%"; "%25") | "::notice title=Замер прогона::\(.)"
 ' "$EXECUTION_FILE"
