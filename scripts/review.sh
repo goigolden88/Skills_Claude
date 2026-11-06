@@ -100,17 +100,24 @@ gate() {
 
   # Повтор (Ш-49): коммит уже проверен — пропуск. Отметку берём только из
   # комментариев запуска: посторонний в публичном репо её не подделает.
-  # Прошлый вердикт — коммит и итог: они нужны повторной проверке (Ш-53).
-  local last seen prev_verdict
-  last=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --jq "
+  # Опора повторной проверки (Ш-53, Ш-202 Штаба) — последний вердикт Claude:
+  # коммит, итог и находки. Вердикт по красным проверкам без Claude опорой не
+  # служит — код тогда никто не читал, нужна полная проверка.
+  local verdicts seen prev prev_verdict prev_findings
+  verdicts=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --jq "
     [.[] | select(.user.login == \"$ACTIONS_BOT\") | .body | select(test(\"<!-- ревьюер: [0-9a-f]+ -->\"))
-     | (capture(\"<!-- ревьюер: (?<sha>[0-9a-f]+) -->\").sha) + \"\t\" + (if startswith(\"**Не сливать**\") then \"$NO\" else \"$OK\" end)]
-    | last // \"\"")
-  IFS=$'\t' read -r seen prev_verdict <<< "$last"
-  if [ "$seen" = "$HEAD_SHA" ]; then
+     | {sha: capture(\"<!-- ревьюер: (?<sha>[0-9a-f]+) -->\").sha,
+        verdict: (if startswith(\"**Не сливать**\") then \"$NO\" else \"$OK\" end),
+        ci: contains(\"Ревьюер такой PR не читает\"),
+        findings: ([split(\"\\n\")[] | select(startswith(\"- \"))] | join(\"\\n\"))}]")
+  seen=$(jq -r 'last.sha // ""' <<< "$verdicts")
+  if [ -n "$seen" ] && [ "$seen" = "$HEAD_SHA" ]; then
     say "PR #$pr: коммит ${HEAD_SHA:0:7} уже проверен — пропуск."
     return
   fi
+  prev=$(jq -r '[.[] | select(.ci | not)] | last.sha // ""' <<< "$verdicts")
+  prev_verdict=$(jq -r '[.[] | select(.ci | not)] | last.verdict // ""' <<< "$verdicts")
+  prev_findings=$(jq -r '[.[] | select(.ci | not)] | last.findings // ""' <<< "$verdicts")
 
   case "$CONCLUSION" in
     success) ;;
@@ -141,12 +148,14 @@ $(footer "$HEAD_SHA")"
   fi
   case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-80} ;; esac
 
-  say "PR #$pr (задача #${issue:-?}), коммит ${HEAD_SHA:0:7}: зовём ревьюера, предел ходов $turns.${seen:+ Повторно: прошлый — ${seen:0:7}, $prev_verdict.}"
+  say "PR #$pr (задача #${issue:-?}), коммит ${HEAD_SHA:0:7}: зовём ревьюера, предел ходов $turns.${prev:+ Повторно, по изменениям: прошлый — ${prev:0:7}, $prev_verdict.}"
   out pr "$pr"
   out issue "$issue"
   out turns "$turns"
-  out prev "$seen"
+  out prev "$prev"
   out prev_verdict "$prev_verdict"
+  # Находки — многострочные: свой разделитель.
+  { echo "prev_findings<<END_PREV_FINDINGS"; echo "${prev_findings:-нет}"; echo "END_PREV_FINDINGS"; } >> "${GITHUB_OUTPUT:-/dev/null}"
 }
 
 post() {

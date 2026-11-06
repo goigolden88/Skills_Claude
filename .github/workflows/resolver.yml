@@ -51,6 +51,20 @@ jobs:
       prs: ${{ steps.find.outputs.prs }}
       count: ${{ steps.find.outputs.count }}
     steps:
+      # Снимки отчёта исполнителя (Ш-202 Штаба) лежат в ветке «<ветка PR>-shots»:
+      # после слияния PR не нужны. Нет такой ветки — не беда.
+      - name: Ветка снимков слитого PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.merged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHOTS: ${{ github.event.pull_request.head.ref }}-shots
+        run: |
+          if gh api -X DELETE "repos/$REPO/git/refs/heads/$SHOTS" > /dev/null 2>&1; then
+            echo "Удалена ветка снимков $SHOTS"
+          else
+            echo "Ветки снимков $SHOTS нет"
+          fi
+
       # Скрипты и инструкция — из репо и коммита этого workflow (у форка —
       # форк, Ш-134); запасной путь — его же main, с предупреждением.
       - name: PR бота с конфликтом

@@ -107,7 +107,8 @@ jobs:
             PR: #${{ steps.gate.outputs.pr }}
             Issue: #${{ steps.gate.outputs.issue }}
             Проверяемый коммит: ${{ github.event.workflow_run.head_sha }}
-            ${{ steps.gate.outputs.prev != '' && format('Повторная проверка: прошлый проверенный коммит {0}, вердикт по нему — {1}. См. «Повторная проверка» в инструкции.', steps.gate.outputs.prev, steps.gate.outputs.prev_verdict) || '' }}
+            ${{ steps.gate.outputs.prev != '' && format('Повторная проверка: прошлый проверенный коммит {0}, вердикт по нему — {1}. См. «Повторная проверка» в инструкции. Находки прошлой проверки:', steps.gate.outputs.prev, steps.gate.outputs.prev_verdict) || '' }}
+            ${{ steps.gate.outputs.prev != '' && steps.gate.outputs.prev_findings || '' }}
 
             Ты в GitHub Action: клон ветки PR на этом коммите готов.
             Команды разрешены списком: по одной за вызов, без `;`, `&&`, `|`
