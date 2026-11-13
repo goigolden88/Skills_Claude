@@ -148,6 +148,11 @@ jobs:
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Защита claude-code-action от чужих PR выключена (Ш-217 Штаба, 13.11):
+          # будит и слияние PR бота — его автор «не подтверждён», и действие
+          # запрещало npm. Чужого кода здесь нет: развязчик берёт только PR
+          # бота из этого же репо (resolve.sh find).
+          restrict_untrusted_prs: "false"
           settings: '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"}}'
           prompt: |
             Репо: ${{ github.repository }}
