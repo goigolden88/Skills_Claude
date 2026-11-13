@@ -46,3 +46,6 @@ jq -r --arg what "$WHAT" --arg model "$MODEL" --arg turns "$TURNS" '
    (.permission_denials[:3][]? | "- \(.tool_name): \((.tool_input.command // .tool_input.file_path // "") | tostring | .[0:80] | gsub("[\r\n]+"; " ") | gsub("\\|"; "¦"))")]
   | join(" | ") | gsub("%"; "%25") | "::notice title=Замер прогона::\(.)"
 ' "$EXECUTION_FILE"
+
+# Счётчики прогона (Ш-214): на что ушли ходы — рядом, тем же WHAT.
+bash "$(dirname "$0")/run-counters.sh" || echo "::warning::счётчики прогона не посчитались"

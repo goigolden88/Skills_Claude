@@ -99,7 +99,7 @@ jobs:
         env:
           SRC: https://raw.githubusercontent.com/${{ job.workflow_repository }}
         run: |
-          for f in agents/resolver.md scripts/resolve.sh scripts/run-summary.sh; do
+          for f in agents/resolver.md scripts/resolve.sh scripts/run-summary.sh scripts/run-counters.sh; do
             curl -sfL "$SRC/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
               || { echo "::warning::$f — с main ${{ job.workflow_repository }}: по коммиту workflow не скачался"
                    curl -sfL "$SRC/main/$f" -o "$RUNNER_TEMP/${f##*/}"; }

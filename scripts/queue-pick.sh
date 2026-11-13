@@ -45,8 +45,8 @@ while IFS=$'\t' read -r num labels deps; do
   effort=${DEFAULT_EFFORT:-high}
   case ",$labels," in *,medium,*) effort=medium ;; *,xhigh,*) effort=xhigh ;; esac
   # Предел ходов (Ш-46): метка «крупная» — большой, иначе — обычный.
-  turns=${DEFAULT_TURNS:-100}
-  case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-200} ;; esac
+  turns=${DEFAULT_TURNS:-100} big=no
+  case ",$labels," in *,крупная,*) turns=${BIG_TURNS:-200} big=yes ;; esac
   pair=no branch="agent/$num"
   case ",$labels," in *,пара,*) pair=yes branch="agent/$num-${model:-opus}-$effort" ;; esac
 
@@ -130,3 +130,4 @@ out effort "$effort"
 out pair "$pair"
 out branch "$branch"
 out turns "$turns"
+out big "$big"

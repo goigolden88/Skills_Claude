@@ -46,14 +46,14 @@ jobs:
         env:
           SRC: https://raw.githubusercontent.com/${{ job.workflow_repository }}
         run: |
-          for f in agents/reviewer.md scripts/review.sh scripts/run-summary.sh; do
+          for f in agents/reviewer.md scripts/review.sh scripts/run-summary.sh scripts/run-counters.sh; do
             curl -sfL "$SRC/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
               || { echo "::warning::$f — с main ${{ job.workflow_repository }}: по коммиту workflow не скачался"
                    curl -sfL "$SRC/main/$f" -o "$RUNNER_TEMP/${f##*/}"; }
           done
           {
             echo 'sums<<END_OF_SUMS'
-            (cd "$RUNNER_TEMP" && sha256sum review.sh run-summary.sh)
+            (cd "$RUNNER_TEMP" && sha256sum review.sh run-summary.sh run-counters.sh)
             echo 'END_OF_SUMS'
           } >> "$GITHUB_OUTPUT"
 

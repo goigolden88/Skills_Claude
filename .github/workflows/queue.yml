@@ -41,7 +41,10 @@ on:
 jobs:
   executor:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Предел времени — у шага Claude (Ш-215: 60 мин крупной, 40 — остальным);
+    # здесь — запас на подготовку и шаги после него: при обрыве шага они
+    # отрабатывают (ветка, замер, итог слота), при обрыве задания — нет.
+    timeout-minutes: 80
     # Слоты строго по очереди: каждый берёт следующую задачу (Ш-42); пять
     # за пробуждение (Ш-43), суточный предел на репо — 8 (Ш-98). Сбой слота
     # отменяет остальные — человек смотрит.
@@ -63,7 +66,7 @@ jobs:
         env:
           SRC: https://raw.githubusercontent.com/${{ job.workflow_repository }}
         run: |
-          for f in agents/executor.md scripts/queue-pick.sh; do
+          for f in agents/executor.md scripts/queue-pick.sh scripts/run-counters.sh; do
             curl -sfL "$SRC/${{ job.workflow_sha }}/$f" -o "$RUNNER_TEMP/${f##*/}" \
               || { echo "::warning::$f — с main ${{ job.workflow_repository }}: по коммиту workflow не скачался"
                    curl -sfL "$SRC/main/$f" -o "$RUNNER_TEMP/${f##*/}"; }
@@ -120,6 +123,7 @@ jobs:
       - if: steps.pick.outputs.issue != ''
         uses: anthropics/claude-code-action@v1
         id: claude
+        timeout-minutes: ${{ steps.pick.outputs.big == 'yes' && 60 || 40 }}
         # Предел ходов мягкий (ретро 12.10, Ш-122 Штаба): Claude Code доводит
         # работу до конца и только потом сравнивает ходы с пределом — шаг
         # краснел у сделанной задачи с PR и отменял остальные слоты. Сбой
@@ -209,6 +213,15 @@ jobs:
             [.[] | select(.type == "rate_limit_event") | .rate_limit_info // {} | "\(.rateLimitType // "?"): \(.status // "?")"] | unique |
             "", "Лимит подписки: \(if length == 0 then "событий нет" else join(", ") end)"
           ' "${{ steps.claude.outputs.execution_file }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Счётчики (Ш-214): на что ушли ходы. И при обрыве по времени — тогда
+      # из журнала сессии Claude Code: файла прогона нет.
+      - name: Счётчики прогона
+        if: always() && steps.pick.outputs.issue != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          WHAT: "Задача: #${{ steps.pick.outputs.issue }}, слот ${{ matrix.slot }}"
+        run: bash "$RUNNER_TEMP/run-counters.sh"
 
       # Сделанное — на GitHub, даже если агент не смог запушить (ретро 08.10:
       # GitHub 5 минут не принимал запись — ветка из 59 ходов пропала).
