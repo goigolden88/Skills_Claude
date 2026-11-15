@@ -255,6 +255,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ steps.pick.outputs.issue }}
+          BRANCH: ${{ steps.pick.outputs.branch }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           DEFAULT_MODEL: ${{ inputs.model }}
@@ -268,6 +269,17 @@ jobs:
           if [ $((JOB_INDEX + 1)) -eq "$JOB_TOTAL" ]; then LAST_SLOT=true; fi
           labels=$(gh issue view "$ISSUE" -R "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           case ",$labels," in *,в-работе,*) stop="прогон кончился, а задача не сдвинулась — метка «в-работе» осталась" ;; esac
+          # PR открыт, а метки агент снять не успел (ходы кончились на шаге 10) —
+          # задача сдвинулась: снять метки за него, очередь идёт (Ш-226 Штаба;
+          # Magic_Fishki#199 стояла из-за этого до слияния).
+          if [ -n "$stop" ]; then
+            open_prs=$(gh api "repos/$REPO/pulls?head=$OWNER:$BRANCH&state=open" --jq length || echo 0)
+            if [ "${open_prs:-0}" -gt 0 ]; then
+              gh issue edit "$ISSUE" -R "$REPO" --remove-label в-работе --remove-label готово > /dev/null || true
+              echo "::warning title=Метки сняты за агента::#$ISSUE — PR по ветке $BRANCH открыт, а «в-работе» осталась; очередь идёт дальше"
+              stop=""
+            fi
+          fi
           status=""
           kind=""
           if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
@@ -294,7 +306,12 @@ jobs:
                 : > "$RUNNER_TEMP/next"
                 if DRY_RUN=1 GITHUB_OUTPUT="$RUNNER_TEMP/next" GITHUB_STEP_SUMMARY=/dev/null bash "$RUNNER_TEMP/queue-pick.sh" > /dev/null; then
                   next=$(sed -n 's/^issue=//p' "$RUNNER_TEMP/next")
-                  if [ -n "$next" ]; then stop="$limit"; target=$next
+                  next_over=$(sed -n 's/^over=//p' "$RUNNER_TEMP/next")
+                  # «Сверх-предела» на следующей — владелец уже решил тратить
+                  # (Ш-226 Штаба): предупреждение не стоп. Отказ (rejected) — стоп всегда.
+                  if [ -n "$next" ] && [ "$next_over" = yes ]; then
+                    echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — на следующей #$next метка «сверх-предела», очередь идёт"
+                  elif [ -n "$next" ]; then stop="$limit"; target=$next
                   else echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — задача #$ISSUE сделана, очередь пуста"; fi
                 else stop="$limit"; fi
               fi ;;
@@ -308,6 +325,7 @@ jobs:
           echo "Стоп очереди: $stop" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$target" = "$ISSUE" ]; then how="снять \`в-работе\` (и, если нужно, снова поставить \`готово\`)"
           else how="задача #$ISSUE сделана, эта ждёт; снять и снова поставить \`готово\`"; fi
+          if [ "$status" = allowed_warning ]; then how="$how; идти дальше, несмотря на предупреждение, — поставить на задачу \`сверх-предела\`, затем снять и снова поставить \`готово\`"; fi
           gh issue comment "$target" -R "$REPO" --body "Очередь остановлена: $stop. Лог прогона: $RUN_URL. Продолжить — $how. @$OWNER"
           exit 1
 
