@@ -63,6 +63,53 @@ footer() {
   printf '<sub>Проверен коммит %s · [лог](%s)</sub>\n<!-- ревьюер: %s -->' "${1:0:7}" "$RUN_URL" "$1"
 }
 
+# Отметки скрипта (Ш-224 Штаба): что чувствительное трогает PR — по списку
+# файлов из GitHub, не со слов модели. Одна строка перед «Совет:» и не с «- »:
+# находки прошлой проверки (gate) и оговорки (summary.py Штаба) — строки «- ».
+# Новый сборщик или пакетный менеджер в проекте — дописать сюда.
+flags() {
+  local pr=$1 files marks=() f base old new
+  if ! files=$(gh api --paginate "repos/$REPO/pulls/$pr/files?per_page=100" \
+      --jq '.[] | .filename, (.previous_filename // empty)'); then
+    printf '**Скрипт отметил:** список файлов PR не прочитался — посмотреть правку вручную.'
+    return
+  fi
+  grep -q '^\.github/' <<< "$files" && marks+=("workflow и настройки GitHub (\`.github/\`)")
+  grep -qE '(^|/)(CLAUDE|CLAUDE\.local|AGENTS)\.md$|(^|/)\.claude/|^agents/|правила-ревью' <<< "$files" \
+    && marks+=("инструкции агентов (\`CLAUDE.md\`, \`.claude/\`, правила ревью)")
+  grep -qE '(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|\.npmrc|\.yarnrc(\.yml)?)$' <<< "$files" \
+    && marks+=("зависимости (lock-файл или настройки npm)")
+  # package.json: только зависимости и scripts — версию и описание не отмечаем.
+  if grep -qE '(^|/)package\.json$' <<< "$files"; then
+    base=$(gh api "repos/$REPO/pulls/$pr" --jq .base.ref 2>/dev/null || echo main)
+    base=$(gh api "repos/$REPO/compare/$base...$HEAD_SHA" --jq .merge_base_commit.sha 2>/dev/null || echo "")
+    while read -r f; do
+      old=$(pkg_keys "$f" "$base") new=$(pkg_keys "$f" "$HEAD_SHA")
+      if [ -z "$base" ] || [ "$old" = "!" ] || [ "$new" = "!" ] || [ "$old" != "$new" ]; then
+        marks+=("зависимости или команды \`$f\`"); fi
+    done < <(grep -E '(^|/)package\.json$' <<< "$files" | sort -u)
+  fi
+  [ ${#marks[@]} -gt 0 ] || return 0
+  local text="${marks[0]}" m
+  for m in "${marks[@]:1}"; do text+="; $m"; done
+  printf '**Скрипт отметил:** PR трогает %s — сливать, только если задача этого просила.' "$text"
+}
+
+# Зависимости и scripts package.json на коммите: JSON одной строкой; нет файла
+# (404) — {}; не прочитался или не разобрался — «!» (тогда отметка есть).
+pkg_keys() {
+  local path ref=$2 raw err
+  path=$(jq -rn --arg p "$1" '$p | split("/") | map(@uri) | join("/")')
+  err=$(mktemp)
+  if ! raw=$(gh api -H "Accept: application/vnd.github.raw+json" "repos/$REPO/contents/$path?ref=$ref" 2>"$err"); then
+    if grep -q 'HTTP 404' "$err"; then echo '{}'; else echo '!'; fi
+    rm -f "$err"; return
+  fi
+  rm -f "$err"
+  jq -cS '{dependencies, devDependencies, optionalDependencies, peerDependencies,
+           bundleDependencies, bundledDependencies, overrides, resolutions, scripts}' <<< "$raw" 2>/dev/null || echo '!'
+}
+
 # Строка повторной проверки (Ш-53): ветка изменилась после проверенного коммита.
 again() {
   [ -z "${1:-}" ] || printf '_Повторная проверка: ветка изменилась после проверки коммита %s._' "${1:0:7}"
@@ -123,12 +170,15 @@ gate() {
     success) ;;
     failure|timed_out)
       say "PR #$pr: проверки красные ($CONCLUSION) — «Не сливать» без Claude."
+      local marks; marks=$(flags "$pr")
       comment "$pr" "**Не сливать**
 ${seen:+
 $(again "$seen")
 }
 Автоматические проверки не прошли — сборка или тесты красные. Ревьюер такой PR не читает.
-
+${marks:+
+$marks
+}
 Совет: посмотреть, что упало, и доработать или закрыть.
 
 $(footer "$HEAD_SHA")"
@@ -174,7 +224,7 @@ post() {
   local verdict body
   verdict=$(jq -r --arg ok "$OK" --arg no "$NO" '
     if (.verdict == $no) or any(.findings[]?; .severity == "блокирует") then $no else $ok end' <<< "$RESULT")
-  body=$(jq -r --arg v "$verdict" --arg no "$NO" --arg again "$(again "${PREV:-}")" '
+  body=$(jq -r --arg v "$verdict" --arg no "$NO" --arg again "$(again "${PREV:-}")" --arg flags "$(flags "$PR")" '
     ([.findings[]? | select(.severity == "блокирует") | "- \(.text)"]) as $block
     | ([.findings[]? | select(.severity != "блокирует") | "- \(.text)"]) as $warn
     | [ (if $v == $no then "**Не сливать**"
@@ -185,6 +235,7 @@ post() {
         (.summary // ""),
         (if ($block | length) > 0 then "", "**Блокирует:**", $block[] else empty end),
         (if ($warn | length) > 0 then "", "**Оговорки:**", $warn[] else empty end),
+        (if $flags != "" then "", $flags else empty end),
         "",
         "Совет: \(.advice // "—")"
       ] | join("\n")' <<< "$RESULT")

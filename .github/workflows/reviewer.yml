@@ -80,6 +80,26 @@ jobs:
           submodules: true
           persist-credentials: false
 
+      # Критерии — с основной ветки (Ш-224 Штаба). CLAUDE.md и правила ревью
+      # ветки PR мог переписать исполнитель, а `.claude/` ветки (настройки,
+      # хуки) Claude Code сам загрузил бы и выполнил в этом задании. В клоне —
+      # версии основной ветки; правку PR в них ревьюер видит в диффе, человек —
+      # в отметке скрипта.
+      - name: Критерии с основной ветки
+        if: steps.gate.outputs.pr != ''
+        env:
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          rm -rf .claude CLAUDE.local.md
+          for f in CLAUDE.md docs/правила-ревью.md; do
+            if git cat-file -e "origin/$BASE:$f" 2>/dev/null; then
+              git show "origin/$BASE:$f" > "$f"
+            else
+              rm -f "$f"
+            fi
+          done
+          git status --short
+
       - name: Инструкция ревьюера
         id: instruction
         if: steps.gate.outputs.pr != ''
@@ -111,6 +131,7 @@ jobs:
             ${{ steps.gate.outputs.prev != '' && steps.gate.outputs.prev_findings || '' }}
 
             Ты в GitHub Action: клон ветки PR на этом коммите готов.
+            CLAUDE.md и docs/правила-ревью.md в клоне — с ветки ${{ github.event.repository.default_branch }}, папки .claude нет (Ш-224).
             Команды разрешены списком: по одной за вызов, без `;`, `&&`, `|`
             и `cd`. Файлы читай и ищи инструментами Read, Grep, Glob.
 
@@ -121,7 +142,8 @@ jobs:
             --effort ${{ inputs.effort }}
             --max-turns ${{ steps.gate.outputs.turns }}
             --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)"
-            --disallowedTools "Edit,Write,NotebookEdit,Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh api:*),Bash(git push:*),Bash(git commit:*)"
+            --permission-mode dontAsk
+            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch,Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh api:*),Bash(git push:*),Bash(git commit:*)"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["можно-сливать","не-сливать"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["блокирует","оговорка"]},"text":{"type":"string"}},"required":["severity","text"]}},"advice":{"type":"string"}},"required":["verdict","summary","findings","advice"]}'
 
       - name: Вердикт
