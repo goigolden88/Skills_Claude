@@ -17,10 +17,24 @@ MAX_ALL_DAY=10   # PR бота за 24 часа во всех репо
 # Предел открытых PR и стоп по лимиту подписки — действуют всегда.
 OVER=сверх-предела
 LIMIT_MARK='<!-- очередь: лимит -->'
+OWNER_MARK='<!-- очередь: не владелец -->'
+ACTIONS_BOT='github-actions[bot]'   # автор комментариев очереди
 
 out() { echo "$1=$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
 say() { echo "$*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
 dry() { [ "${DRY_RUN:-}" = 1 ]; }
+
+# Кто последним поставил «готово» (Ш-224 Штаба): брать задачу можно, только
+# если владелец. Агент (claude[bot]) и посторонний ставят метку не за него.
+# Метку от сессии Штаба GitHub пишет от владельца — проходит. События идут
+# страницами — читаем все. Сбой API — «?»: пропуск без комментария.
+ready_by() {
+  local who
+  who=$(gh api --paginate "repos/$REPO/issues/$1/events?per_page=100" \
+    --jq '.[] | select(.event == "labeled" and .label.name == "готово") | .actor.login') \
+    || { echo "?"; return; }
+  tail -n 1 <<< "$who"
+}
 
 say "### Очередь"
 say ""
@@ -39,6 +53,19 @@ candidates=$(gh issue list -R "$REPO" --state open --label готово --limit 
 issue="" pair=no model="" effort="" branch="" over=no
 while IFS=$'\t' read -r num labels deps; do
   [ -n "$num" ] || continue
+  by=$(ready_by "$num")
+  if [ "${by,,}" != "${OWNER,,}" ]; then
+    if [ "$by" = "?" ]; then say "- #$num: не прочитал, кто поставил «готово», — пропуск"; continue; fi
+    say "- #$num: «готово» поставил ${by:-неизвестно кто}, не владелец, — пропуск"
+    marked=$(gh api --paginate "repos/$REPO/issues/$num/comments?per_page=100" \
+      --jq ".[] | select(.user.login == \"$ACTIONS_BOT\" and (.body | contains(\"$OWNER_MARK\"))) | .id" 2>/dev/null || echo "?")
+    if [ -z "$marked" ] && ! dry; then
+      gh issue comment "$num" -R "$REPO" --body "Очередь задачу не берёт: метку \`готово\` поставил ${by:-не владелец}, а не владелец репо. Задача ваша — снимите и снова поставьте \`готово\`. @$OWNER
+
+$OWNER_MARK" > /dev/null || true
+    fi
+    continue
+  fi
   model=""
   case ",$labels," in *,sonnet,*) model=sonnet ;; *,opus,*) model=opus ;; esac
   # Усилие (Ш-54): метка medium или xhigh, иначе — из вызова проекта.
