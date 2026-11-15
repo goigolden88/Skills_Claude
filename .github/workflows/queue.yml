@@ -311,6 +311,15 @@ jobs:
                   # (Ш-226 Штаба): предупреждение не стоп. Отказ (rejected) — стоп всегда.
                   if [ -n "$next" ] && [ "$next_over" = yes ]; then
                     echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — на следующей #$next метка «сверх-предела», очередь идёт"
+                    # Видно владельцу (Ш-227 Штаба): комментарий с упоминанием —
+                    # не чаще раза в 6 часов на репо, без Claude.
+                    mark="<!-- queue-limit-warning -->"
+                    since=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+                    seen=$(gh api "repos/$REPO/issues/comments?since=$since&per_page=100" --jq "any(.[]; .body | contains(\"$mark\"))" || echo false)
+                    if [ "$seen" != true ]; then
+                      body=$(printf '%s\n\n%s' "Лимит подписки близко ($status${kind:+, $kind}) — очередь идёт дальше: на задаче метка \`сверх-предела\`. Идёт до отказа по лимиту; остановить — снять \`сверх-предела\` с ждущих задач. Лог: $RUN_URL. @$OWNER" "$mark")
+                      gh issue comment "$next" -R "$REPO" --body "$body" > /dev/null || true
+                    fi
                   elif [ -n "$next" ]; then stop="$limit"; target=$next
                   else echo "::warning title=Лимит подписки близко::$status${kind:+, $kind} — задача #$ISSUE сделана, очередь пуста"; fi
                 else stop="$limit"; fi
