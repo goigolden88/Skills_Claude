@@ -170,7 +170,8 @@ jobs:
             --effort ${{ inputs.effort }}
             --max-turns ${{ inputs.max-turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
-            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git push --force-with-lease:*),Bash(git push origin ${{ github.event.repository.default_branch }}:*),Bash(git rebase:*)"
+            --permission-mode dontAsk
+            --disallowedTools "WebFetch,WebSearch,Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git push --force-with-lease:*),Bash(git push origin ${{ github.event.repository.default_branch }}:*),Bash(git rebase:*)"
 
       - name: Итог
         if: always() && steps.check.outputs.go == 'yes'

@@ -167,7 +167,8 @@ jobs:
             --effort ${{ steps.pick.outputs.effort }}
             --max-turns ${{ steps.pick.outputs.turns }}
             --allowedTools "Read,Edit,Write,Glob,Grep,${{ inputs.project-tools }},Bash(git:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr create:*),Bash(gh label list:*)"
-            --disallowedTools "Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
+            --permission-mode dontAsk
+            --disallowedTools "WebFetch,WebSearch,Bash(gh pr merge:*),Bash(git push --force:*),Bash(git push -f:*)"
 
       # Замер прогона (Ш-19, Ш-31): ходы и время — из итога Claude Code, а не
       # со слов агента; команды, в которых ему отказали, — чтобы править
