@@ -18,6 +18,7 @@ MAX_ALL_DAY=10   # PR бота за 24 часа во всех репо
 OVER=сверх-предела
 LIMIT_MARK='<!-- очередь: лимит -->'
 OWNER_MARK='<!-- очередь: не владелец -->'
+UNREAD_MARK='<!-- очередь: нет ответа -->'
 ACTIONS_BOT='github-actions[bot]'   # автор комментариев очереди
 
 out() { echo "$1=$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
@@ -36,6 +37,26 @@ ready_by() {
   tail -n 1 <<< "$who"
 }
 
+# Состояние задачи из строки «Очередь: после #N» (Ш-228 Штаба). Печатает
+# open, closed, missing (404: задачи нет — удалена или перенесена) или error.
+# Сбой — одна повторная проба через 10 с, не больше: ошибка значит «ждать»,
+# а не «закрыта» (16.11: сбой ответа о #222 пустил #223 вне очереди).
+dep_state() {
+  local out err i
+  err=$(mktemp)
+  for i in 1 2; do
+    if out=$(gh api "repos/$REPO/issues/$1" --jq .state 2> "$err"); then
+      rm -f "$err"
+      case "$out" in open|closed) echo "$out" ;; *) echo error ;; esac
+      return
+    fi
+    if grep -q "HTTP 404" "$err"; then rm -f "$err"; echo missing; return; fi
+    [ "$i" = 1 ] && sleep 10
+  done
+  rm -f "$err"
+  echo error
+}
+
 say "### Очередь"
 say ""
 
@@ -51,6 +72,7 @@ candidates=$(gh issue list -R "$REPO" --state open --label готово --limit 
   | "\(.number)\t\([.labels[].name] | join(","))\t\([(.body // "") | split("\n")[] | select(test("Очередь")) | scan("[Пп]осле\\s+#([0-9]+)") | .[0]] | join(","))"')
 
 issue="" pair=no model="" effort="" branch="" over=no
+waiting=0 unread=""   # сколько задач ждут; чьё состояние не прочитано
 while IFS=$'\t' read -r num labels deps; do
   [ -n "$num" ] || continue
   by=$(ready_by "$num")
@@ -77,12 +99,19 @@ $OWNER_MARK" > /dev/null || true
   pair=no branch="agent/$num"
   case ",$labels," in *,пара,*) pair=yes branch="agent/$num-${model:-opus}-$effort" ;; esac
 
-  wait=""
+  wait="" why=""
   for dep in ${deps//,/ }; do
-    state=$(gh api "repos/$REPO/issues/$dep" --jq .state 2>/dev/null || echo closed)
-    [ "$state" = open ] && wait=$dep
+    # Ссылка на себя ждала бы вечно — её не ждём.
+    if [ "$dep" = "$num" ]; then say "- #$num: «после #$dep» — ссылка на себя, не ждём"; continue; fi
+    case "$(dep_state "$dep")" in
+      closed) ;;
+      open) wait=$dep ;;
+      missing) say "- #$num: задачи #$dep нет (удалена или перенесена) — её не ждём" ;;
+      *) wait=$dep why=" — не прочитал её состояние (две попытки), жду"; unread="${unread:+$unread, }#$num (о #$dep)" ;;
+    esac
+    [ -n "$wait" ] && break
   done
-  if [ -n "$wait" ]; then say "- #$num ждёт #$wait"; continue; fi
+  if [ -n "$wait" ]; then say "- #$num ждёт #$wait$why"; waiting=$((waiting + 1)); continue; fi
 
   # По ветке задачи есть открытый или слитый PR — задача сдвинута, второй раз не брать.
   # Закрытый без слияния («не сливать») не держит: владелец снова поставил «готово» — доработка (Ш-95).
@@ -96,7 +125,21 @@ $OWNER_MARK" > /dev/null || true
 done <<< "$candidates"
 
 if [ -z "$issue" ]; then
-  say "Очередь пуста — работы нет."
+  if [ -n "$unread" ]; then
+    # Сбой GitHub, а не пустая очередь: сказать владельцу, раз на задачу.
+    say "Задача не взята: GitHub не ответил о состоянии — $unread. Очередь проснётся при слиянии PR или новом «готово»."
+    first=${unread%% *}; first=${first#\#}
+    last=$(gh api "repos/$REPO/issues/$first/comments?per_page=100" --jq '.[-1].body // ""' 2>/dev/null || echo "")
+    if [[ "$last" != *"$UNREAD_MARK"* ]] && ! dry; then
+      gh issue comment "$first" -R "$REPO" --body "Очередь задачу не взяла: GitHub дважды не ответил, закрыта ли задача, которую она ждёт, — ждать безопаснее, чем идти вне очереди. Очередь проснётся сама при слиянии PR в этом репо; сразу — снимите и снова поставьте \`готово\`. @$OWNER
+
+$UNREAD_MARK" > /dev/null || true
+    fi
+  elif [ "$waiting" -gt 0 ]; then
+    say "Взять нечего: задач, ждущих другие, — $waiting."
+  else
+    say "Очередь пуста — работы нет."
+  fi
   exit 0
 fi
 
