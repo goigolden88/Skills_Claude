@@ -35,6 +35,14 @@ on:
         description: После развязки разбудить очередь исполнителя (Ш-97)
         type: boolean
         default: true
+      queue-turns:
+        description: Предел ходов задачи для очереди, разбуженной слиянием; как max-turns у executor.yml (Ш-229)
+        type: number
+        default: 100
+      queue-big-turns:
+        description: То же для задачи с меткой «крупная»; как big-turns у executor.yml
+        type: number
+        default: 200
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -215,5 +223,7 @@ jobs:
       node-version: ${{ inputs.node-version }}
       chrome: ${{ inputs.chrome }}
       project-tools: ${{ inputs.project-tools }}
+      max-turns: ${{ inputs.queue-turns }}
+      big-turns: ${{ inputs.queue-big-turns }}
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
